@@ -197,9 +197,9 @@ func TestOptionFlagName(t *testing.T) {
 }
 
 func TestOptionEnvVarName(t *testing.T) {
-	assert.Equal(t, "RCLONE_LOCAL_NOUNC", nouncOption.EnvVarName("local"))
-	assert.Equal(t, "RCLONE_LOCAL_COPY_LINKS", copyLinksOption.EnvVarName("local"))
-	assert.Equal(t, "RCLONE_LOCAL_CASE_INSENSITIVE", caseInsensitiveOption.EnvVarName("local"))
+	assert.Equal(t, "RRCLONE_LOCAL_NOUNC", nouncOption.EnvVarName("local"))
+	assert.Equal(t, "RRCLONE_LOCAL_COPY_LINKS", copyLinksOption.EnvVarName("local"))
+	assert.Equal(t, "RRCLONE_LOCAL_CASE_INSENSITIVE", caseInsensitiveOption.EnvVarName("local"))
 }
 
 func TestOptionGetters(t *testing.T) {

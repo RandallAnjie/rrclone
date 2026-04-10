@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -56,18 +57,19 @@ import (
 
 // Constants
 const (
-	rcloneClientID              = "202264815644.apps.googleusercontent.com"
-	rcloneEncryptedClientSecret = "eX8GpZTVx3vxMWVkuuBdDWmAUE6rGhTwVrvG9GhllYccSdj2-mvHVg"
-	driveFolderType             = "application/vnd.google-apps.folder"
-	shortcutMimeType            = "application/vnd.google-apps.shortcut"
-	shortcutMimeTypeDangling    = "application/vnd.google-apps.shortcut.dangling" // synthetic mime type for internal use
-	timeFormatIn                = time.RFC3339
-	timeFormatOut               = "2006-01-02T15:04:05.000000000Z07:00"
-	defaultMinSleep             = fs.Duration(100 * time.Millisecond)
-	defaultBurst                = 100
-	defaultExportExtensions     = "docx,xlsx,pptx,svg"
-	scopePrefix                 = "https://www.googleapis.com/auth/"
-	defaultScope                = "drive"
+	rcloneClientID                = "202264815644.apps.googleusercontent.com"
+	rcloneEncryptedClientSecret   = "eX8GpZTVx3vxMWVkuuBdDWmAUE6rGhTwVrvG9GhllYccSdj2-mvHVg"
+	driveFolderType               = "application/vnd.google-apps.folder"
+	shortcutMimeType              = "application/vnd.google-apps.shortcut"
+	shortcutMimeTypeDangling      = "application/vnd.google-apps.shortcut.dangling" // synthetic mime type for internal use
+	timeFormatIn                  = time.RFC3339
+	timeFormatOut                 = "2006-01-02T15:04:05.000000000Z07:00"
+	defaultMinSleep               = fs.Duration(100 * time.Millisecond)
+	defaultBurst                  = 100
+	defaultExportExtensions       = "docx,xlsx,pptx,svg"
+	defaultServiceAccountCooldown = fs.Duration(15 * time.Minute)
+	scopePrefix                   = "https://www.googleapis.com/auth/"
+	defaultScope                  = "drive"
 	// chunkSize is the size of the chunks created during a resumable upload and should be a power of two.
 	// 1<<18 is the minimum size supported by the Google uploader, and there is no maximum.
 	minChunkSize     = fs.SizeSuffix(googleapi.MinUploadChunkSize)
@@ -326,6 +328,20 @@ a non root folder as its starting point.
 		}, {
 			Name: "service_account_file",
 			Help: "Service Account Credentials JSON file path.\n\nLeave blank normally.\nNeeded only if you want use SA instead of interactive login." + env.ShellExpandHelp,
+		}, {
+			Name: "service_account_files",
+			Help: `Additional service account credential files for automatic rotation.
+
+Provide a comma or newline separated list of JSON files, directories, or glob
+patterns. When the active service account hits Drive quota or rate-limit
+errors, rclone will switch to the next available file and retry automatically.
+Each directory contributes all *.json files in sorted order.` + env.ShellExpandHelp,
+			Advanced: true,
+		}, {
+			Name:     "service_account_cooldown",
+			Help:     "How long to keep a rate-limited or quota-limited service account on cooldown before using it again.",
+			Advanced: true,
+			Default:  defaultServiceAccountCooldown,
 		}, {
 			Name:      "service_account_credentials",
 			Help:      "Service Account Credentials JSON blob.\n\nLeave blank normally.\nNeeded only if you want use SA instead of interactive login.",
@@ -785,6 +801,8 @@ type Options struct {
 	Scope                     string               `config:"scope"`
 	RootFolderID              string               `config:"root_folder_id"`
 	ServiceAccountFile        string               `config:"service_account_file"`
+	ServiceAccountFiles       string               `config:"service_account_files"`
+	ServiceAccountCooldown    fs.Duration          `config:"service_account_cooldown"`
 	ServiceAccountCredentials string               `config:"service_account_credentials"`
 	TeamDriveID               string               `config:"team_drive"`
 	AuthOwnerOnly             bool                 `config:"auth_owner_only"`
@@ -852,6 +870,173 @@ type Fs struct {
 	dirResourceKeys  *sync.Map                    // map directory ID to resource key
 	permissionsMu    *sync.Mutex                  // protect the below
 	permissions      map[string]*drive.Permission // map permission IDs to Permissions
+	saPool           *serviceAccountPool
+}
+
+type serviceAccountPool struct {
+	mu        sync.Mutex
+	files     []string
+	cooldowns map[string]time.Time
+}
+
+var errNoServiceAccountAvailable = errors.New("no alternate service account available")
+
+func newServiceAccountPool(current string, extra []string) *serviceAccountPool {
+	seen := map[string]struct{}{}
+	files := make([]string, 0, 1+len(extra))
+	for _, file := range append([]string{current}, extra...) {
+		if file == "" {
+			continue
+		}
+		if _, ok := seen[file]; ok {
+			continue
+		}
+		seen[file] = struct{}{}
+		files = append(files, file)
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	return &serviceAccountPool{files: files, cooldowns: make(map[string]time.Time, len(files))}
+}
+
+func (p *serviceAccountPool) add(file string) {
+	if p == nil || file == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if slices.Contains(p.files, file) {
+		return
+	}
+	p.files = append(p.files, file)
+}
+
+func (p *serviceAccountPool) markCooldown(file string, until time.Time) {
+	if p == nil || file == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cooldowns[file] = until
+	if !slices.Contains(p.files, file) {
+		p.files = append(p.files, file)
+	}
+	if until.IsZero() {
+		delete(p.cooldowns, file)
+	}
+}
+
+func (p *serviceAccountPool) availableCandidates(current string, now time.Time, cooldown time.Duration) (candidates []string, wait time.Duration) {
+	if p == nil {
+		return nil, 0
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.files) <= 1 {
+		return nil, 0
+	}
+	if current != "" {
+		p.cooldowns[current] = now.Add(cooldown)
+	}
+	currentIndex := slices.Index(p.files, current)
+	start := 0
+	count := len(p.files)
+	if currentIndex >= 0 {
+		start = currentIndex + 1
+		count--
+	}
+	var earliest time.Time
+	for i := 0; i < count; i++ {
+		file := p.files[(start+i)%len(p.files)]
+		until := p.cooldowns[file]
+		if until.IsZero() || !until.After(now) {
+			candidates = append(candidates, file)
+			continue
+		}
+		if earliest.IsZero() || until.Before(earliest) {
+			earliest = until
+		}
+	}
+	if !earliest.IsZero() {
+		wait = time.Until(earliest)
+		if wait < 0 {
+			wait = 0
+		}
+	}
+	return candidates, wait
+}
+
+func parseServiceAccountFiles(spec string) ([]string, error) {
+	parts := strings.FieldsFunc(spec, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r'
+	})
+	seen := map[string]struct{}{}
+	files := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		expanded, err := expandServiceAccountSpec(env.ShellExpand(part))
+		if err != nil {
+			return nil, err
+		}
+		for _, file := range expanded {
+			if _, ok := seen[file]; ok {
+				continue
+			}
+			seen[file] = struct{}{}
+			files = append(files, file)
+		}
+	}
+	return files, nil
+}
+
+func expandServiceAccountSpec(spec string) ([]string, error) {
+	if strings.ContainsAny(spec, "*?[") {
+		matches, err := filepath.Glob(spec)
+		if err != nil {
+			return nil, fmt.Errorf("invalid service account glob %q: %w", spec, err)
+		}
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("service account glob %q matched no files", spec)
+		}
+		sort.Strings(matches)
+		return matches, nil
+	}
+	info, err := os.Stat(spec)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't access service account file %q: %w", spec, err)
+	}
+	if !info.IsDir() {
+		return []string{spec}, nil
+	}
+	entries, err := os.ReadDir(spec)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't read service account directory %q: %w", spec, err)
+	}
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") {
+			continue
+		}
+		files = append(files, filepath.Join(spec, entry.Name()))
+	}
+	if len(files) == 0 {
+		return nil, fmt.Errorf("service account directory %q contained no JSON files", spec)
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+func shouldRotateServiceAccount(reason string) bool {
+	switch reason {
+	case "rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded", "storageQuotaExceeded":
+		return true
+	default:
+		return false
+	}
 }
 
 type baseObject struct {
@@ -933,6 +1118,11 @@ func (f *Fs) shouldRetry(ctx context.Context, err error) (bool, error) {
 		}
 		if len(gerr.Errors) > 0 {
 			reason := gerr.Errors[0].Reason
+			if shouldRotateServiceAccount(reason) {
+				if rotateErr := f.rotateServiceAccount(ctx, reason, err); rotateErr == nil {
+					return true, err
+				}
+			}
 			if reason == "rateLimitExceeded" || reason == "userRateLimitExceeded" {
 				if f.opt.StopOnUploadLimit && gerr.Errors[0].Message == "User rate limit exceeded." {
 					fs.Errorf(f, "Received upload limit error: %v", err)
@@ -1311,6 +1501,35 @@ func createOAuthClient(ctx context.Context, opt *Options, name string, m configm
 	return oAuthClient, nil
 }
 
+func (f *Fs) rotateServiceAccount(ctx context.Context, reason string, cause error) error {
+	if f.saPool == nil || f.opt.ServiceAccountCooldown <= 0 {
+		return errNoServiceAccountAvailable
+	}
+	current := f.opt.ServiceAccountFile
+	candidates, wait := f.saPool.availableCandidates(current, time.Now(), time.Duration(f.opt.ServiceAccountCooldown))
+	if len(candidates) == 0 {
+		if wait > 0 {
+			fs.Debugf(f, "Service account %q hit %s, all alternates are cooling down for up to %v", current, reason, wait)
+		}
+		return errNoServiceAccountAvailable
+	}
+	var changeErr error
+	for _, candidate := range candidates {
+		changeErr = f.changeServiceAccountFile(ctx, candidate)
+		if changeErr == nil {
+			f.saPool.add(candidate)
+			fs.Infof(f, "Switched service account from %q to %q after Drive error %q", current, candidate, reason)
+			return nil
+		}
+		f.saPool.markCooldown(candidate, time.Now().Add(time.Duration(f.opt.ServiceAccountCooldown)))
+		fs.Errorf(f, "Failed to switch service account from %q to %q after %q: %v", current, candidate, reason, changeErr)
+	}
+	if changeErr == nil {
+		changeErr = cause
+	}
+	return changeErr
+}
+
 func checkUploadChunkSize(cs fs.SizeSuffix) error {
 	if !isPowerOfTwo(int64(cs)) {
 		return fmt.Errorf("%v isn't a power of two", cs)
@@ -1360,6 +1579,13 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 	if err != nil {
 		return nil, fmt.Errorf("drive: chunk size: %w", err)
 	}
+	serviceAccountFiles, err := parseServiceAccountFiles(opt.ServiceAccountFiles)
+	if err != nil {
+		return nil, fmt.Errorf("drive: service account files: %w", err)
+	}
+	if opt.ServiceAccountFile == "" && len(serviceAccountFiles) > 0 && opt.ServiceAccountCredentials == "" && !opt.EnvAuth {
+		opt.ServiceAccountFile = serviceAccountFiles[0]
+	}
 
 	oAuthClient, err := createOAuthClient(ctx, opt, name, m)
 	if err != nil {
@@ -1385,6 +1611,7 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 		dirResourceKeys: new(sync.Map),
 		permissionsMu:   new(sync.Mutex),
 		permissions:     make(map[string]*drive.Permission),
+		saPool:          newServiceAccountPool(opt.ServiceAccountFile, serviceAccountFiles),
 	}
 	f.isTeamDrive = opt.TeamDriveID != ""
 	f.features = (&fs.Features{
@@ -3374,6 +3601,10 @@ func (f *Fs) changeServiceAccountFile(ctx context.Context, file string) (err err
 		if err != nil {
 			return fmt.Errorf("couldn't create Drive v2 client: %w", err)
 		}
+	}
+	if f.saPool != nil {
+		f.saPool.add(file)
+		f.saPool.markCooldown(file, time.Time{})
 	}
 	return nil
 }

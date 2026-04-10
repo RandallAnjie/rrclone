@@ -56,6 +56,38 @@ func TestDriveScopes(t *testing.T) {
 	}
 }
 
+func TestParseServiceAccountFiles(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "01.json")
+	second := filepath.Join(dir, "02.json")
+	require.NoError(t, os.WriteFile(first, []byte(`{"type":"service_account"}`), 0o600))
+	require.NoError(t, os.WriteFile(second, []byte(`{"type":"service_account"}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("ignore"), 0o600))
+
+	files, err := parseServiceAccountFiles(strings.Join([]string{first, dir, filepath.Join(dir, "*.json")}, ","))
+	require.NoError(t, err)
+	assert.Equal(t, []string{first, second}, files)
+}
+
+func TestServiceAccountPoolAvailableCandidates(t *testing.T) {
+	pool := newServiceAccountPool("sa1.json", []string{"sa2.json", "sa3.json"})
+	now := time.Now()
+	candidates, wait := pool.availableCandidates("sa1.json", now, 10*time.Minute)
+	assert.Equal(t, []string{"sa2.json", "sa3.json"}, candidates)
+	assert.Zero(t, wait)
+
+	pool.markCooldown("sa2.json", now.Add(5*time.Minute))
+	pool.markCooldown("sa3.json", now.Add(7*time.Minute))
+	candidates, wait = pool.availableCandidates("sa1.json", now, 10*time.Minute)
+	assert.Empty(t, candidates)
+	assert.InDelta(t, float64(5*time.Minute), float64(wait), float64(2*time.Second))
+
+	pool.markCooldown("sa2.json", time.Time{})
+	candidates, wait = pool.availableCandidates("sa1.json", now, 10*time.Minute)
+	assert.Equal(t, []string{"sa2.json"}, candidates)
+	assert.InDelta(t, float64(7*time.Minute), float64(wait), float64(2*time.Second))
+}
+
 /*
 var additionalMimeTypes = map[string]string{
 	"application/vnd.ms-excel.sheet.macroenabled.12":                          ".xlsm",

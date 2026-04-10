@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	configFileName       = "rclone.conf"
+	configFileName       = "rrclone.conf"
 	hiddenConfigFileName = "." + configFileName
 	noConfigFile         = "notfound"
 

@@ -168,7 +168,7 @@ func findLocalConfig() (configDir string, configFile string) {
 // ($AppData/rclone/rclone.conf)
 func findAppDataConfig() (configDir string, configFile string) {
 	if appDataDir := os.Getenv("APPDATA"); appDataDir != "" {
-		configDir = filepath.Join(appDataDir, "rclone")
+		configDir = filepath.Join(appDataDir, "rrclone")
 		configFile = findFile(configDir, configFileName)
 	} else {
 		fs.Debugf(nil, "Environment variable APPDATA is not defined and cannot be used as configuration location")
@@ -181,7 +181,7 @@ func findAppDataConfig() (configDir string, configFile string) {
 // ($XDG_CONFIG_HOME\rclone\rclone.conf)
 func findXDGConfig() (configDir string, configFile string) {
 	if xdgConfigDir := os.Getenv("XDG_CONFIG_HOME"); xdgConfigDir != "" {
-		configDir = filepath.Join(xdgConfigDir, "rclone")
+		configDir = filepath.Join(xdgConfigDir, "rrclone")
 		configFile = findFile(configDir, configFileName)
 	}
 	return
@@ -191,7 +191,7 @@ func findXDGConfig() (configDir string, configFile string) {
 // (~/.config/rclone/rclone.conf)
 func findDotConfigConfig(home string) (configDir string, configFile string) {
 	if home != "" {
-		configDir = filepath.Join(home, ".config", "rclone")
+		configDir = filepath.Join(home, ".config", "rrclone")
 		configFile = findFile(configDir, configFileName)
 	}
 	return
@@ -737,7 +737,7 @@ func makeCacheDir() (dir string) {
 		// if no dir found then use TempDir - we will have a cachedir!
 		dir = os.TempDir()
 	}
-	return filepath.Join(dir, "rclone")
+	return filepath.Join(dir, "rrclone")
 }
 
 // GetCacheDir returns the default directory for cache

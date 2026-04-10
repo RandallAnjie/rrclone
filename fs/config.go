@@ -769,7 +769,10 @@ func InitialLogLevel() LogLevel {
 			}
 		}
 	}
-	envValue, found := os.LookupEnv("RCLONE_LOG_LEVEL")
+	envValue, found := os.LookupEnv("RRCLONE_LOG_LEVEL")
+	if !found {
+		envValue, found = os.LookupEnv("RCLONE_LOG_LEVEL")
+	}
 	if found && envValue == "DEBUG" {
 		logLevel = LogLevelDebug
 	}
@@ -827,13 +830,13 @@ func AddConfig(ctx context.Context) (context.Context, *ConfigInfo) {
 
 // ConfigToEnv converts a config section and name, e.g. ("my-remote",
 // "ignore-size") into an environment name
-// "RCLONE_CONFIG_MY-REMOTE_IGNORE_SIZE"
+// "RRCLONE_CONFIG_MY-REMOTE_IGNORE_SIZE"
 func ConfigToEnv(section, name string) string {
-	return "RCLONE_CONFIG_" + strings.ToUpper(section+"_"+strings.ReplaceAll(name, "-", "_"))
+	return "RRCLONE_CONFIG_" + strings.ToUpper(section+"_"+strings.ReplaceAll(name, "-", "_"))
 }
 
 // OptionToEnv converts an option name, e.g. "ignore-size" into an
-// environment name "RCLONE_IGNORE_SIZE"
+// environment name "RRCLONE_IGNORE_SIZE"
 func OptionToEnv(name string) string {
-	return "RCLONE_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
+	return "RRCLONE_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
 }

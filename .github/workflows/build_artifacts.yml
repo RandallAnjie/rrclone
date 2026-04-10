@@ -23,7 +23,7 @@ jobs:
             goarch: amd64
             binary: rrclone-linux-amd64
           - name: darwin-arm64
-            os: macos-latest
+            os: ubuntu-latest
             goos: darwin
             goarch: arm64
             binary: rrclone-darwin-arm64

@@ -84,34 +84,155 @@ func TestParseOAuthAccountFiles(t *testing.T) {
 }
 
 func TestTokenFileMapper(t *testing.T) {
+	t.Run("Legacy", func(t *testing.T) {
+		dir := t.TempDir()
+		tokenFile := filepath.Join(dir, "token.json")
+		tokenJSON := `{"access_token":"tok","token_type":"Bearer","refresh_token":"rtok","expiry":"2030-01-01T00:00:00Z"}`
+		require.NoError(t, os.WriteFile(tokenFile, []byte(tokenJSON), 0o600))
+
+		base := configmap.Simple{"scope": "drive", "token": "old_token", "client_id": "base_cid", "client_secret": "base_cs"}
+		m := &tokenFileMapper{base: base, file: tokenFile}
+
+		// Token comes from file, not base
+		v, ok := m.Get("token")
+		assert.True(t, ok)
+		assert.Equal(t, tokenJSON, v)
+
+		// client_id and client_secret fall through to base in legacy mode
+		v, ok = m.Get("client_id")
+		assert.True(t, ok)
+		assert.Equal(t, "base_cid", v)
+
+		v, ok = m.Get("client_secret")
+		assert.True(t, ok)
+		assert.Equal(t, "base_cs", v)
+
+		// Other keys fall through to base
+		v, ok = m.Get("scope")
+		assert.True(t, ok)
+		assert.Equal(t, "drive", v)
+
+		// Writing token overwrites the file (raw token blob)
+		newToken := `{"access_token":"newtok","token_type":"Bearer"}`
+		m.Set("token", newToken)
+		data, err := os.ReadFile(tokenFile)
+		require.NoError(t, err)
+		assert.Equal(t, newToken, string(data))
+
+		// Writing other keys goes to base
+		m.Set("scope", "drive.readonly")
+		assert.Equal(t, "drive.readonly", base["scope"])
+	})
+
+	t.Run("Structured", func(t *testing.T) {
+		dir := t.TempDir()
+		tokenFile := filepath.Join(dir, "account.json")
+		innerToken := `{"access_token":"tok","token_type":"Bearer","refresh_token":"rtok","expiry":"2030-01-01T00:00:00Z"}`
+		structured := `{"client_id":"mycid","client_secret":"mycs","token":` + innerToken + `}`
+		require.NoError(t, os.WriteFile(tokenFile, []byte(structured), 0o600))
+
+		base := configmap.Simple{"scope": "drive", "client_id": "base_cid", "client_secret": "base_cs"}
+		m := &tokenFileMapper{base: base, file: tokenFile}
+
+		// Token is extracted from the "token" field
+		v, ok := m.Get("token")
+		assert.True(t, ok)
+		assert.Equal(t, innerToken, v)
+
+		// client_id and client_secret come from the file, not the base
+		v, ok = m.Get("client_id")
+		assert.True(t, ok)
+		assert.Equal(t, "mycid", v)
+
+		v, ok = m.Get("client_secret")
+		assert.True(t, ok)
+		assert.Equal(t, "mycs", v)
+
+		// Other keys still fall through to base
+		v, ok = m.Get("scope")
+		assert.True(t, ok)
+		assert.Equal(t, "drive", v)
+
+		// Writing token updates only the "token" field; client credentials are preserved
+		newToken := `{"access_token":"newtok","token_type":"Bearer"}`
+		m.Set("token", newToken)
+		// Read back through readOAuthAccountFile which normalises whitespace
+		gotCID, gotCS, gotTok, gotStructured, readErr := readOAuthAccountFile(tokenFile)
+		require.NoError(t, readErr)
+		assert.True(t, gotStructured)
+		assert.Equal(t, "mycid", gotCID)
+		assert.Equal(t, "mycs", gotCS)
+		assert.Equal(t, newToken, gotTok)
+
+		// Verify the updated token is returned on next Get
+		v, ok = m.Get("token")
+		assert.True(t, ok)
+		assert.Equal(t, newToken, v)
+
+		// Writing other keys still goes to base
+		m.Set("scope", "drive.readonly")
+		assert.Equal(t, "drive.readonly", base["scope"])
+	})
+
+	t.Run("StructuredMissingCredentials", func(t *testing.T) {
+		// Structured file without client_id/client_secret falls back to base
+		dir := t.TempDir()
+		tokenFile := filepath.Join(dir, "account.json")
+		innerToken := `{"access_token":"tok","token_type":"Bearer"}`
+		structured := `{"token":` + innerToken + `}`
+		require.NoError(t, os.WriteFile(tokenFile, []byte(structured), 0o600))
+
+		base := configmap.Simple{"client_id": "base_cid", "client_secret": "base_cs"}
+		m := &tokenFileMapper{base: base, file: tokenFile}
+
+		// Token is extracted from the "token" field
+		v, ok := m.Get("token")
+		assert.True(t, ok)
+		assert.Equal(t, innerToken, v)
+
+		// Missing client_id/client_secret fall through to base
+		v, ok = m.Get("client_id")
+		assert.True(t, ok)
+		assert.Equal(t, "base_cid", v)
+
+		v, ok = m.Get("client_secret")
+		assert.True(t, ok)
+		assert.Equal(t, "base_cs", v)
+	})
+}
+
+func TestReadOAuthAccountFile(t *testing.T) {
 	dir := t.TempDir()
-	tokenFile := filepath.Join(dir, "token.json")
-	tokenJSON := `{"access_token":"tok","token_type":"Bearer","refresh_token":"rtok","expiry":"2030-01-01T00:00:00Z"}`
-	require.NoError(t, os.WriteFile(tokenFile, []byte(tokenJSON), 0o600))
 
-	base := configmap.Simple{"scope": "drive", "token": "old_token"}
-	m := &tokenFileMapper{base: base, file: tokenFile}
+	t.Run("Legacy", func(t *testing.T) {
+		f := filepath.Join(dir, "legacy.json")
+		tokenJSON := `{"access_token":"tok","token_type":"Bearer"}`
+		require.NoError(t, os.WriteFile(f, []byte(tokenJSON), 0o600))
+		cid, cs, tok, structured, err := readOAuthAccountFile(f)
+		require.NoError(t, err)
+		assert.False(t, structured)
+		assert.Equal(t, tokenJSON, tok)
+		assert.Empty(t, cid)
+		assert.Empty(t, cs)
+	})
 
-	// Token comes from file, not base
-	v, ok := m.Get("token")
-	assert.True(t, ok)
-	assert.Equal(t, tokenJSON, v)
+	t.Run("Structured", func(t *testing.T) {
+		f := filepath.Join(dir, "structured.json")
+		inner := `{"access_token":"tok","token_type":"Bearer"}`
+		content := `{"client_id":"cid","client_secret":"cs","token":` + inner + `}`
+		require.NoError(t, os.WriteFile(f, []byte(content), 0o600))
+		cid, cs, tok, structured, err := readOAuthAccountFile(f)
+		require.NoError(t, err)
+		assert.True(t, structured)
+		assert.Equal(t, "cid", cid)
+		assert.Equal(t, "cs", cs)
+		assert.Equal(t, inner, tok)
+	})
 
-	// Other keys fall through to base
-	v, ok = m.Get("scope")
-	assert.True(t, ok)
-	assert.Equal(t, "drive", v)
-
-	// Writing token updates the file
-	newToken := `{"access_token":"newtok","token_type":"Bearer"}`
-	m.Set("token", newToken)
-	data, err := os.ReadFile(tokenFile)
-	require.NoError(t, err)
-	assert.Equal(t, newToken, string(data))
-
-	// Writing other keys goes to base
-	m.Set("scope", "drive.readonly")
-	assert.Equal(t, "drive.readonly", base["scope"])
+	t.Run("NotFound", func(t *testing.T) {
+		_, _, _, _, err := readOAuthAccountFile(filepath.Join(dir, "missing.json"))
+		assert.Error(t, err)
+	})
 }
 
 func TestServiceAccountPoolAvailableCandidates(t *testing.T) {

@@ -311,18 +311,41 @@ If you have multiple regular Google accounts (not service accounts) and want
 rclone to automatically switch between them when quota or rate-limit errors
 occur, you can use `--drive-oauth-account-files`.
 
-Each file must contain a single OAuth token JSON blob — the same value that
-rclone stores under the `token` key in its config file. You can extract a token
-from an existing remote with:
+Each account file must be a JSON file in one of two formats:
+
+**Legacy format** — the file contains only the raw OAuth token JSON blob,
+the same value that rclone stores under the `token` key in its config file.
+You can extract a token from an existing remote with:
 
 ```
 rclone config show myremote | grep ^token
 ```
 
 Save the token value (everything after `token = `) to a plain `.json` file,
-one file per account.
+one file per account. In this format the `client_id` and `client_secret` from
+the main remote config are reused for every account.
 
-Example config:
+```json
+{"access_token":"...","token_type":"Bearer","refresh_token":"...","expiry":"..."}
+```
+
+**Structured format** — the file is a JSON object with `client_id`,
+`client_secret`, and `token` fields. Use this when each account belongs to a
+different OAuth application (e.g. you registered a separate Google Cloud project
+per account). On rotation rclone switches the entire credential set atomically —
+client ID, client secret, and token all change together.
+
+```json
+{
+  "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
+  "client_secret": "YOUR_CLIENT_SECRET",
+  "token": {"access_token":"...","token_type":"Bearer","refresh_token":"...","expiry":"..."}
+}
+```
+
+Both formats can be mixed freely within the same `oauth_account_files` list.
+
+Example config using the structured format:
 
 ```
 [myremote]
@@ -341,7 +364,10 @@ oauth_account_cooldown = 15m
   `service_account_files` is configured — service account rotation takes
   priority.
 - When a rotation succeeds, the refreshed OAuth token is written back to the
-  same file so it stays valid across rclone restarts.
+  same file. Structured files are updated in-place (only the `token` field
+  changes; `client_id` and `client_secret` are preserved). Legacy files are
+  overwritten with the new raw token blob. This keeps tokens valid across
+  rclone restarts regardless of format.
 
 ### Shared drives (team drives)
 

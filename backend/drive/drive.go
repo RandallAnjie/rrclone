@@ -67,7 +67,8 @@ const (
 	defaultMinSleep               = fs.Duration(100 * time.Millisecond)
 	defaultBurst                  = 100
 	defaultExportExtensions       = "docx,xlsx,pptx,svg"
-	defaultServiceAccountCooldown = fs.Duration(15 * time.Minute)
+	defaultServiceAccountCooldown  = fs.Duration(15 * time.Minute)
+	defaultOAuthAccountCooldown    = fs.Duration(15 * time.Minute)
 	scopePrefix                   = "https://www.googleapis.com/auth/"
 	defaultScope                  = "drive"
 	// chunkSize is the size of the chunks created during a resumable upload and should be a power of two.
@@ -342,6 +343,22 @@ Each directory contributes all *.json files in sorted order.` + env.ShellExpandH
 			Help:     "How long to keep a rate-limited or quota-limited service account on cooldown before using it again.",
 			Advanced: true,
 			Default:  defaultServiceAccountCooldown,
+		}, {
+			Name: "oauth_account_files",
+			Help: `OAuth token files for automatic account rotation.
+
+Provide a comma or newline separated list of JSON files, directories, or glob
+patterns. Each file must contain an OAuth token blob in the same JSON format
+rclone stores under the "token" key in its config file. When the active OAuth
+account hits Drive quota or rate-limit errors, rclone will switch to the next
+available token and retry automatically. Has no effect when service accounts
+are configured.` + env.ShellExpandHelp,
+			Advanced: true,
+		}, {
+			Name:    "oauth_account_cooldown",
+			Help:    "How long to keep a rate-limited or quota-limited OAuth account on cooldown before using it again.",
+			Advanced: true,
+			Default: defaultOAuthAccountCooldown,
 		}, {
 			Name:      "service_account_credentials",
 			Help:      "Service Account Credentials JSON blob.\n\nLeave blank normally.\nNeeded only if you want use SA instead of interactive login.",
@@ -804,6 +821,8 @@ type Options struct {
 	ServiceAccountFiles       string               `config:"service_account_files"`
 	ServiceAccountCooldown    fs.Duration          `config:"service_account_cooldown"`
 	ServiceAccountCredentials string               `config:"service_account_credentials"`
+	OAuthAccountFiles         string               `config:"oauth_account_files"`
+	OAuthAccountCooldown      fs.Duration          `config:"oauth_account_cooldown"`
 	TeamDriveID               string               `config:"team_drive"`
 	AuthOwnerOnly             bool                 `config:"auth_owner_only"`
 	UseTrash                  bool                 `config:"use_trash"`
@@ -871,6 +890,8 @@ type Fs struct {
 	permissionsMu    *sync.Mutex                  // protect the below
 	permissions      map[string]*drive.Permission // map permission IDs to Permissions
 	saPool           *serviceAccountPool
+	oaPool           *serviceAccountPool // pool for regular OAuth account rotation
+	currentOAFile    string              // active oauth account file (empty = default account)
 }
 
 type serviceAccountPool struct {
@@ -1119,8 +1140,14 @@ func (f *Fs) shouldRetry(ctx context.Context, err error) (bool, error) {
 		if len(gerr.Errors) > 0 {
 			reason := gerr.Errors[0].Reason
 			if shouldRotateServiceAccount(reason) {
-				if rotateErr := f.rotateServiceAccount(ctx, reason, err); rotateErr == nil {
-					return true, err
+				if f.saPool != nil {
+					if rotateErr := f.rotateServiceAccount(ctx, reason, err); rotateErr == nil {
+						return true, err
+					}
+				} else if f.oaPool != nil {
+					if rotateErr := f.rotateOAuthAccount(ctx, reason, err); rotateErr == nil {
+						return true, err
+					}
 				}
 			}
 			if reason == "rateLimitExceeded" || reason == "userRateLimitExceeded" {
@@ -1530,6 +1557,178 @@ func (f *Fs) rotateServiceAccount(ctx context.Context, reason string, cause erro
 	return changeErr
 }
 
+// tokenFileMapper is a configmap.Mapper that reads/writes the OAuth token
+// from/to a plain JSON file while delegating all other keys to the base mapper.
+// This lets each OAuth account token file act as an independent credential store.
+type tokenFileMapper struct {
+	base configmap.Mapper
+	file string
+	mu   sync.Mutex
+}
+
+func (m *tokenFileMapper) Get(key string) (string, bool) {
+	if key == config.ConfigToken {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		data, err := os.ReadFile(m.file)
+		if err != nil {
+			return "", false
+		}
+		return strings.TrimSpace(string(data)), true
+	}
+	return m.base.Get(key)
+}
+
+func (m *tokenFileMapper) Set(key, value string) {
+	if key == config.ConfigToken {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if err := os.WriteFile(m.file, []byte(value), 0o600); err != nil {
+			fs.Errorf(nil, "drive: failed to save refreshed token to %q: %v", m.file, err)
+		}
+		return
+	}
+	m.base.Set(key, value)
+}
+
+var errNoOAuthAccountAvailable = errors.New("no alternate OAuth account available")
+
+// parseOAuthAccountFiles expands the spec the same way as parseServiceAccountFiles
+// but accepts any file type (not only .json extension filtering is needed for
+// directory expansion).
+func parseOAuthAccountFiles(spec string) ([]string, error) {
+	parts := strings.FieldsFunc(spec, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r'
+	})
+	seen := map[string]struct{}{}
+	files := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		expanded, err := expandOAuthAccountSpec(env.ShellExpand(part))
+		if err != nil {
+			return nil, err
+		}
+		for _, file := range expanded {
+			if _, ok := seen[file]; ok {
+				continue
+			}
+			seen[file] = struct{}{}
+			files = append(files, file)
+		}
+	}
+	return files, nil
+}
+
+func expandOAuthAccountSpec(spec string) ([]string, error) {
+	if strings.ContainsAny(spec, "*?[") {
+		matches, err := filepath.Glob(spec)
+		if err != nil {
+			return nil, fmt.Errorf("invalid oauth account glob %q: %w", spec, err)
+		}
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("oauth account glob %q matched no files", spec)
+		}
+		sort.Strings(matches)
+		return matches, nil
+	}
+	info, err := os.Stat(spec)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't access oauth account file %q: %w", spec, err)
+	}
+	if !info.IsDir() {
+		return []string{spec}, nil
+	}
+	entries, err := os.ReadDir(spec)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't read oauth account directory %q: %w", spec, err)
+	}
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") {
+			continue
+		}
+		files = append(files, filepath.Join(spec, entry.Name()))
+	}
+	if len(files) == 0 {
+		return nil, fmt.Errorf("oauth account directory %q contained no JSON files", spec)
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+func (f *Fs) rotateOAuthAccount(ctx context.Context, reason string, cause error) error {
+	if f.oaPool == nil || f.opt.OAuthAccountCooldown <= 0 {
+		return errNoOAuthAccountAvailable
+	}
+	current := f.currentOAFile
+	candidates, wait := f.oaPool.availableCandidates(current, time.Now(), time.Duration(f.opt.OAuthAccountCooldown))
+	if len(candidates) == 0 {
+		if wait > 0 {
+			fs.Debugf(f, "OAuth account %q hit %s, all alternates are cooling down for up to %v", current, reason, wait)
+		}
+		return errNoOAuthAccountAvailable
+	}
+	var changeErr error
+	for _, candidate := range candidates {
+		changeErr = f.changeOAuthAccountFile(ctx, candidate)
+		if changeErr == nil {
+			f.oaPool.add(candidate)
+			fs.Infof(f, "Switched OAuth account from %q to %q after Drive error %q", current, candidate, reason)
+			return nil
+		}
+		f.oaPool.markCooldown(candidate, time.Now().Add(time.Duration(f.opt.OAuthAccountCooldown)))
+		fs.Errorf(f, "Failed to switch OAuth account from %q to %q after %q: %v", current, candidate, reason, changeErr)
+	}
+	if changeErr == nil {
+		changeErr = cause
+	}
+	return changeErr
+}
+
+func (f *Fs) changeOAuthAccountFile(ctx context.Context, file string) (err error) {
+	fs.Debugf(nil, "Changing OAuth account file from %q to %q", f.currentOAFile, file)
+	if file == f.currentOAFile {
+		return nil
+	}
+	oldSvc := f.svc
+	oldv2Svc := f.v2Svc
+	oldOAuthClient := f.client
+	oldFile := f.currentOAFile
+	defer func() {
+		if err != nil {
+			f.svc = oldSvc
+			f.v2Svc = oldv2Svc
+			f.client = oldOAuthClient
+			f.currentOAFile = oldFile
+		}
+	}()
+	f.currentOAFile = file
+	m := &tokenFileMapper{base: f.m, file: file}
+	oAuthClient, _, err := oauthutil.NewClientWithBaseClient(ctx, f.name, m, driveConfig, getClient(ctx, &f.opt))
+	if err != nil {
+		return fmt.Errorf("drive: failed when making oauth client from account file %q: %w", file, err)
+	}
+	f.client = oAuthClient
+	f.svc, err = drive.NewService(context.Background(), option.WithHTTPClient(f.client))
+	if err != nil {
+		return fmt.Errorf("couldn't create Drive client: %w", err)
+	}
+	if f.opt.V2DownloadMinSize >= 0 {
+		f.v2Svc, err = drive_v2.NewService(context.Background(), option.WithHTTPClient(f.client))
+		if err != nil {
+			return fmt.Errorf("couldn't create Drive v2 client: %w", err)
+		}
+	}
+	if f.oaPool != nil {
+		f.oaPool.add(file)
+		f.oaPool.markCooldown(file, time.Time{})
+	}
+	return nil
+}
+
 func checkUploadChunkSize(cs fs.SizeSuffix) error {
 	if !isPowerOfTwo(int64(cs)) {
 		return fmt.Errorf("%v isn't a power of two", cs)
@@ -1587,6 +1786,11 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 		opt.ServiceAccountFile = serviceAccountFiles[0]
 	}
 
+	oauthAccountFiles, err := parseOAuthAccountFiles(opt.OAuthAccountFiles)
+	if err != nil {
+		return nil, fmt.Errorf("drive: oauth account files: %w", err)
+	}
+
 	oAuthClient, err := createOAuthClient(ctx, opt, name, m)
 	if err != nil {
 		return nil, fmt.Errorf("drive: failed when making oauth client: %w", err)
@@ -1612,6 +1816,7 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 		permissionsMu:   new(sync.Mutex),
 		permissions:     make(map[string]*drive.Permission),
 		saPool:          newServiceAccountPool(opt.ServiceAccountFile, serviceAccountFiles),
+		oaPool:          newServiceAccountPool("", oauthAccountFiles),
 	}
 	f.isTeamDrive = opt.TeamDriveID != ""
 	f.features = (&fs.Features{

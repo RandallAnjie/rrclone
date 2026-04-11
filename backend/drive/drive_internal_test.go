@@ -17,6 +17,7 @@ import (
 
 	_ "github.com/rclone/rclone/backend/local"
 	"github.com/rclone/rclone/fs"
+	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/filter"
 	"github.com/rclone/rclone/fs/fserrors"
 	"github.com/rclone/rclone/fs/hash"
@@ -67,6 +68,50 @@ func TestParseServiceAccountFiles(t *testing.T) {
 	files, err := parseServiceAccountFiles(strings.Join([]string{first, dir, filepath.Join(dir, "*.json")}, ","))
 	require.NoError(t, err)
 	assert.Equal(t, []string{first, second}, files)
+}
+
+func TestParseOAuthAccountFiles(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "account1.json")
+	second := filepath.Join(dir, "account2.json")
+	require.NoError(t, os.WriteFile(first, []byte(`{"access_token":"tok1","token_type":"Bearer"}`), 0o600))
+	require.NoError(t, os.WriteFile(second, []byte(`{"access_token":"tok2","token_type":"Bearer"}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("ignore"), 0o600))
+
+	files, err := parseOAuthAccountFiles(strings.Join([]string{first, dir, filepath.Join(dir, "*.json")}, ","))
+	require.NoError(t, err)
+	assert.Equal(t, []string{first, second}, files)
+}
+
+func TestTokenFileMapper(t *testing.T) {
+	dir := t.TempDir()
+	tokenFile := filepath.Join(dir, "token.json")
+	tokenJSON := `{"access_token":"tok","token_type":"Bearer","refresh_token":"rtok","expiry":"2030-01-01T00:00:00Z"}`
+	require.NoError(t, os.WriteFile(tokenFile, []byte(tokenJSON), 0o600))
+
+	base := configmap.Simple{"scope": "drive", "token": "old_token"}
+	m := &tokenFileMapper{base: base, file: tokenFile}
+
+	// Token comes from file, not base
+	v, ok := m.Get("token")
+	assert.True(t, ok)
+	assert.Equal(t, tokenJSON, v)
+
+	// Other keys fall through to base
+	v, ok = m.Get("scope")
+	assert.True(t, ok)
+	assert.Equal(t, "drive", v)
+
+	// Writing token updates the file
+	newToken := `{"access_token":"newtok","token_type":"Bearer"}`
+	m.Set("token", newToken)
+	data, err := os.ReadFile(tokenFile)
+	require.NoError(t, err)
+	assert.Equal(t, newToken, string(data))
+
+	// Writing other keys goes to base
+	m.Set("scope", "drive.readonly")
+	assert.Equal(t, "drive.readonly", base["scope"])
 }
 
 func TestServiceAccountPoolAvailableCandidates(t *testing.T) {

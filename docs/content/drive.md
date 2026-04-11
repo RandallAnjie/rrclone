@@ -305,6 +305,44 @@ do this instead:
 - use rclone without specifying the `--drive-impersonate` option, like this:
   `rclone -v lsf gdrive:backup`
 
+### OAuth account rotation
+
+If you have multiple regular Google accounts (not service accounts) and want
+rclone to automatically switch between them when quota or rate-limit errors
+occur, you can use `--drive-oauth-account-files`.
+
+Each file must contain a single OAuth token JSON blob — the same value that
+rclone stores under the `token` key in its config file. You can extract a token
+from an existing remote with:
+
+```
+rclone config show myremote | grep ^token
+```
+
+Save the token value (everything after `token = `) to a plain `.json` file,
+one file per account.
+
+Example config:
+
+```
+[myremote]
+type = drive
+token = {"access_token":"...","token_type":"Bearer","refresh_token":"...","expiry":"..."}
+oauth_account_files = /path/to/account1.json,/path/to/account2.json,/path/to/tokens/
+oauth_account_cooldown = 15m
+```
+
+- `oauth_account_files` accepts a comma or newline separated list of JSON
+  files, directories (all `*.json` files inside in sorted order), or glob
+  patterns.
+- `oauth_account_cooldown` controls how long a rate-limited account is held
+  back before rclone retries it (default 15 minutes).
+- This feature has no effect when `service_account_file` or
+  `service_account_files` is configured — service account rotation takes
+  priority.
+- When a rotation succeeds, the refreshed OAuth token is written back to the
+  same file so it stays valid across rclone restarts.
+
 ### Shared drives (team drives)
 
 If you want to configure the remote to point to a Google Shared Drive
@@ -767,6 +805,38 @@ Properties:
 - Config:      service_account_credentials
 - Env Var:     RCLONE_DRIVE_SERVICE_ACCOUNT_CREDENTIALS
 - Type:        string
+- Required:    false
+
+#### --drive-oauth-account-files
+
+OAuth token files for automatic account rotation.
+
+Provide a comma or newline separated list of JSON files, directories, or glob
+patterns. Each file must contain an OAuth token blob in the same JSON format
+rclone stores under the "token" key in its config file. When the active OAuth
+account hits Drive quota or rate-limit errors, rclone will switch to the next
+available token and retry automatically. Has no effect when service accounts
+are configured.
+
+Leading `~` will be expanded in the file name as will environment variables such as `${RCLONE_CONFIG_DIR}`.
+
+Properties:
+
+- Config:      oauth_account_files
+- Env Var:     RCLONE_DRIVE_OAUTH_ACCOUNT_FILES
+- Type:        string
+- Required:    false
+
+#### --drive-oauth-account-cooldown
+
+How long to keep a rate-limited or quota-limited OAuth account on cooldown before using it again.
+
+Properties:
+
+- Config:      oauth_account_cooldown
+- Env Var:     RCLONE_DRIVE_OAUTH_ACCOUNT_COOLDOWN
+- Type:        Duration
+- Default:     15m0s
 - Required:    false
 
 #### --drive-team-drive

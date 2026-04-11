@@ -68,8 +68,8 @@ const (
 	defaultMinSleep               = fs.Duration(100 * time.Millisecond)
 	defaultBurst                  = 100
 	defaultExportExtensions       = "docx,xlsx,pptx,svg"
-	defaultServiceAccountCooldown  = fs.Duration(15 * time.Minute)
-	defaultOAuthAccountCooldown    = fs.Duration(15 * time.Minute)
+	defaultServiceAccountCooldown = fs.Duration(15 * time.Minute)
+	defaultOAuthAccountCooldown   = fs.Duration(15 * time.Minute)
 	scopePrefix                   = "https://www.googleapis.com/auth/"
 	defaultScope                  = "drive"
 	// chunkSize is the size of the chunks created during a resumable upload and should be a power of two.
@@ -356,10 +356,10 @@ available token and retry automatically. Has no effect when service accounts
 are configured.` + env.ShellExpandHelp,
 			Advanced: true,
 		}, {
-			Name:    "oauth_account_cooldown",
-			Help:    "How long to keep a rate-limited or quota-limited OAuth account on cooldown before using it again.",
+			Name:     "oauth_account_cooldown",
+			Help:     "How long to keep a rate-limited or quota-limited OAuth account on cooldown before using it again.",
 			Advanced: true,
-			Default: defaultOAuthAccountCooldown,
+			Default:  defaultOAuthAccountCooldown,
 		}, {
 			Name:      "service_account_credentials",
 			Help:      "Service Account Credentials JSON blob.\n\nLeave blank normally.\nNeeded only if you want use SA instead of interactive login.",
@@ -1873,8 +1873,16 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 	if err != nil {
 		return nil, fmt.Errorf("drive: oauth account files: %w", err)
 	}
+	oauthMapper := m
+	currentOAuthAccountFile := ""
+	if opt.ServiceAccountCredentials == "" && opt.ServiceAccountFile == "" && !opt.EnvAuth && len(oauthAccountFiles) > 0 {
+		if token, ok := m.Get(config.ConfigToken); !ok || strings.TrimSpace(token) == "" {
+			currentOAuthAccountFile = oauthAccountFiles[0]
+			oauthMapper = &tokenFileMapper{base: m, file: currentOAuthAccountFile}
+		}
+	}
 
-	oAuthClient, err := createOAuthClient(ctx, opt, name, m)
+	oAuthClient, err := createOAuthClient(ctx, opt, name, oauthMapper)
 	if err != nil {
 		return nil, fmt.Errorf("drive: failed when making oauth client: %w", err)
 	}
@@ -1900,6 +1908,7 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 		permissions:     make(map[string]*drive.Permission),
 		saPool:          newServiceAccountPool(opt.ServiceAccountFile, serviceAccountFiles),
 		oaPool:          newServiceAccountPool("", oauthAccountFiles),
+		currentOAFile:   currentOAuthAccountFile,
 	}
 	f.isTeamDrive = opt.TeamDriveID != ""
 	f.features = (&fs.Features{

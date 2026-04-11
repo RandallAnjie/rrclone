@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1557,9 +1558,51 @@ func (f *Fs) rotateServiceAccount(ctx context.Context, reason string, cause erro
 	return changeErr
 }
 
-// tokenFileMapper is a configmap.Mapper that reads/writes the OAuth token
-// from/to a plain JSON file while delegating all other keys to the base mapper.
-// This lets each OAuth account token file act as an independent credential store.
+// oauthAccountFileData holds the contents of a structured OAuth account file.
+// When this format is used, per-account client credentials are stored alongside
+// the token so that each account can use its own OAuth application.
+type oauthAccountFileData struct {
+	ClientID     string          `json:"client_id,omitempty"`
+	ClientSecret string          `json:"client_secret,omitempty"`
+	Token        json.RawMessage `json:"token,omitempty"`
+}
+
+// readOAuthAccountFile reads the file at path and returns its parsed contents.
+// Two formats are supported:
+//   - Structured: {"client_id":"…","client_secret":"…","token":{…}}
+//   - Legacy:     the file contains only the raw OAuth token JSON blob
+//
+// When the file contains a top-level "token" JSON object the structured format
+// is assumed and isStructured is true. Otherwise the entire file content is
+// returned as tokenJSON and isStructured is false.
+func readOAuthAccountFile(path string) (clientID, clientSecret, tokenJSON string, isStructured bool, err error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", "", false, err
+	}
+	var d oauthAccountFileData
+	if jsonErr := json.Unmarshal(data, &d); jsonErr == nil && len(d.Token) > 0 {
+		compacted := &bytes.Buffer{}
+		if compactErr := json.Compact(compacted, d.Token); compactErr == nil {
+			return d.ClientID, d.ClientSecret, compacted.String(), true, nil
+		}
+		return d.ClientID, d.ClientSecret, string(d.Token), true, nil
+	}
+	return "", "", strings.TrimSpace(string(data)), false, nil
+}
+
+// tokenFileMapper is a configmap.Mapper that reads/writes OAuth credentials
+// from/to a JSON file while delegating all other keys to the base mapper.
+//
+// Two file formats are supported:
+//   - Structured: {"client_id":"…","client_secret":"…","token":{…}}
+//     client_id and client_secret override the base mapper so each account
+//     can use its own OAuth application. Token refreshes update only the
+//     "token" field while preserving the client credentials in the file.
+//   - Legacy: the file contains only the raw OAuth token JSON blob.
+//     Only the token key is served from the file; client_id and client_secret
+//     fall through to the base mapper. This is backward-compatible with files
+//     created by earlier versions of this feature.
 type tokenFileMapper struct {
 	base configmap.Mapper
 	file string
@@ -1567,28 +1610,68 @@ type tokenFileMapper struct {
 }
 
 func (m *tokenFileMapper) Get(key string) (string, bool) {
-	if key == config.ConfigToken {
+	switch key {
+	case config.ConfigToken:
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		data, err := os.ReadFile(m.file)
+		_, _, tokenJSON, _, err := readOAuthAccountFile(m.file)
 		if err != nil {
 			return "", false
 		}
-		return strings.TrimSpace(string(data)), true
+		return tokenJSON, true
+	case config.ConfigClientID, config.ConfigClientSecret:
+		m.mu.Lock()
+		clientID, clientSecret, _, structured, err := readOAuthAccountFile(m.file)
+		m.mu.Unlock()
+		if err == nil && structured {
+			if key == config.ConfigClientID && clientID != "" {
+				return clientID, true
+			}
+			if key == config.ConfigClientSecret && clientSecret != "" {
+				return clientSecret, true
+			}
+		}
+		return m.base.Get(key)
+	default:
+		return m.base.Get(key)
 	}
-	return m.base.Get(key)
 }
 
 func (m *tokenFileMapper) Set(key, value string) {
-	if key == config.ConfigToken {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		if err := os.WriteFile(m.file, []byte(value), 0o600); err != nil {
-			fs.Errorf(nil, "drive: failed to save refreshed token to %q: %v", m.file, err)
+	if key != config.ConfigToken {
+		m.base.Set(key, value)
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	clientID, clientSecret, _, structured, err := readOAuthAccountFile(m.file)
+	if err == nil && structured {
+		// Structured format: update only the token field, preserving client credentials.
+		// Compact the token JSON so the inner blob is stored without extra whitespace.
+		compacted := &bytes.Buffer{}
+		if compactErr := json.Compact(compacted, []byte(value)); compactErr != nil {
+			compacted.Reset()
+			compacted.WriteString(value)
+		}
+		d := oauthAccountFileData{
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
+			Token:        json.RawMessage(compacted.Bytes()),
+		}
+		updated, marshalErr := json.MarshalIndent(d, "", "  ")
+		if marshalErr != nil {
+			fs.Errorf(nil, "drive: failed to marshal updated account file %q: %v", m.file, marshalErr)
+			return
+		}
+		if writeErr := os.WriteFile(m.file, updated, 0o600); writeErr != nil {
+			fs.Errorf(nil, "drive: failed to save refreshed token to %q: %v", m.file, writeErr)
 		}
 		return
 	}
-	m.base.Set(key, value)
+	// Legacy format: the file contains only the raw token JSON blob.
+	if writeErr := os.WriteFile(m.file, []byte(value), 0o600); writeErr != nil {
+		fs.Errorf(nil, "drive: failed to save refreshed token to %q: %v", m.file, writeErr)
+	}
 }
 
 var errNoOAuthAccountAvailable = errors.New("no alternate OAuth account available")

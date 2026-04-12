@@ -487,6 +487,9 @@ func NewClientWithBaseClient(ctx context.Context, name string, m configmap.Mappe
 		return nil, nil, err
 	}
 
+	// Token refresh can happen long after the original request/mount setup context
+	// has been canceled, so detach cancellation while preserving values.
+	ctx = context.WithoutCancel(ctx)
 	// Set our own http client in the context
 	ctx = Context(ctx, baseClient)
 
@@ -509,6 +512,9 @@ func NewClientCredentialsClient(ctx context.Context, name string, m configmap.Ma
 	token, _ := GetToken(name, m)
 	// If the token doesn't exist then we will fetch one in the next step as we don't need a refresh token
 
+	// Token refresh can happen long after the original request/mount setup context
+	// has been canceled, so detach cancellation while preserving values.
+	ctx = context.WithoutCancel(ctx)
 	// Set our own http client in the context
 	ctx = Context(ctx, baseClient)
 

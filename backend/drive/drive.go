@@ -1876,10 +1876,9 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 	oauthMapper := m
 	currentOAuthAccountFile := ""
 	if opt.ServiceAccountCredentials == "" && opt.ServiceAccountFile == "" && !opt.EnvAuth && len(oauthAccountFiles) > 0 {
-		if token, ok := m.Get(config.ConfigToken); !ok || strings.TrimSpace(token) == "" {
-			currentOAuthAccountFile = oauthAccountFiles[0]
-			oauthMapper = &tokenFileMapper{base: m, file: currentOAuthAccountFile}
-		}
+		currentOAuthAccountFile = oauthAccountFiles[0]
+		oauthMapper = &tokenFileMapper{base: m, file: currentOAuthAccountFile}
+		fs.Infof(nil, "drive: loaded %d OAuth account files for rotation (cooldown: %v)", len(oauthAccountFiles), opt.OAuthAccountCooldown)
 	}
 
 	oAuthClient, err := createOAuthClient(ctx, opt, name, oauthMapper)

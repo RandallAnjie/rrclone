@@ -1054,7 +1054,7 @@ func expandServiceAccountSpec(spec string) ([]string, error) {
 
 func shouldRotateServiceAccount(reason string) bool {
 	switch reason {
-	case "rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded", "storageQuotaExceeded":
+	case "rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded", "storageQuotaExceeded", "authError":
 		return true
 	default:
 		return false
@@ -1591,6 +1591,28 @@ func readOAuthAccountFile(path string) (clientID, clientSecret, tokenJSON string
 	return "", "", strings.TrimSpace(string(data)), false, nil
 }
 
+// normalizeTokenExpiry checks the raw OAuth token JSON and, when the "expiry"
+// field is absent or set to the Go zero time ("0001-01-01T00:00:00Z"), replaces
+// it with a time safely in the past ("1970-01-01T00:00:00Z").  This forces the
+// oauth2 library to treat the access_token as expired and obtain a fresh one
+// via the refresh_token, rather than using the stale access_token as-is.
+func normalizeTokenExpiry(tokenJSON string) string {
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(tokenJSON), &m); err != nil {
+		return tokenJSON
+	}
+	const zeroExpiry = "0001-01-01T00:00:00Z"
+	const pastExpiry = "1970-01-01T00:00:00Z"
+	expiry, _ := m["expiry"].(string)
+	if expiry == "" || expiry == zeroExpiry {
+		m["expiry"] = pastExpiry
+		if b, err := json.Marshal(m); err == nil {
+			return string(b)
+		}
+	}
+	return tokenJSON
+}
+
 // tokenFileMapper is a configmap.Mapper that reads/writes OAuth credentials
 // from/to a JSON file while delegating all other keys to the base mapper.
 //
@@ -1618,6 +1640,11 @@ func (m *tokenFileMapper) Get(key string) (string, bool) {
 		if err != nil {
 			return "", false
 		}
+		// If the token has a zero or missing expiry the Go oauth2 library
+		// treats it as never-expiring and uses the (stale) access_token
+		// directly without refreshing.  Force a refresh by replacing the
+		// zero expiry with a time safely in the past.
+		tokenJSON = normalizeTokenExpiry(tokenJSON)
 		return tokenJSON, true
 	case config.ConfigClientID, config.ConfigClientSecret:
 		m.mu.Lock()
@@ -1790,9 +1817,16 @@ func (f *Fs) changeOAuthAccountFile(ctx context.Context, file string) (err error
 	}()
 	f.currentOAFile = file
 	m := &tokenFileMapper{base: f.m, file: file}
-	oAuthClient, _, err := oauthutil.NewClientWithBaseClient(ctx, f.name, m, driveConfig, getClient(ctx, &f.opt))
+	oAuthClient, ts, err := oauthutil.NewClientWithBaseClient(ctx, f.name, m, driveConfig, getClient(ctx, &f.opt))
 	if err != nil {
 		return fmt.Errorf("drive: failed when making oauth client from account file %q: %w", file, err)
+	}
+	// Verify the token is usable (e.g. refresh_token is valid) before
+	// committing to this account.  A failure here lets the caller try the
+	// next candidate rather than discovering the problem on the first real
+	// API call.
+	if _, tokenErr := ts.Token(); tokenErr != nil {
+		return fmt.Errorf("drive: token validation failed for account file %q: %w", file, tokenErr)
 	}
 	f.client = oAuthClient
 	f.svc, err = drive.NewService(context.Background(), option.WithHTTPClient(f.client))

@@ -1054,7 +1054,7 @@ func expandServiceAccountSpec(spec string) ([]string, error) {
 
 func shouldRotateServiceAccount(reason string) bool {
 	switch reason {
-	case "rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded", "storageQuotaExceeded":
+	case "rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded", "storageQuotaExceeded", "authError":
 		return true
 	default:
 		return false

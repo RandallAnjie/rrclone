@@ -893,6 +893,7 @@ type Fs struct {
 	saPool           *serviceAccountPool
 	oaPool           *serviceAccountPool // pool for regular OAuth account rotation
 	currentOAFile    string              // active oauth account file (empty = default account)
+	oaRotateMu       sync.Mutex          // serialize OAuth account rotation under concurrent rate-limit errors
 }
 
 type serviceAccountPool struct {
@@ -987,6 +988,31 @@ func (p *serviceAccountPool) availableCandidates(current string, now time.Time, 
 		}
 	}
 	return candidates, wait
+}
+
+func (p *serviceAccountPool) waitForAvailableCandidates(ctx context.Context, current string, cooldown time.Duration) (candidates []string, firstWait time.Duration, totalWait time.Duration, err error) {
+	if p == nil {
+		return nil, 0, 0, nil
+	}
+	for {
+		candidates, wait := p.availableCandidates(current, time.Now(), cooldown)
+		if len(candidates) > 0 || wait <= 0 {
+			return candidates, firstWait, totalWait, nil
+		}
+		if firstWait == 0 {
+			firstWait = wait
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil, firstWait, totalWait, ctx.Err()
+		case <-timer.C:
+			totalWait += wait
+		}
+	}
 }
 
 func parseServiceAccountFiles(spec string) ([]string, error) {
@@ -1773,6 +1799,9 @@ func (f *Fs) rotateOAuthAccount(ctx context.Context, reason string, cause error)
 	if f.oaPool == nil || f.opt.OAuthAccountCooldown <= 0 {
 		return errNoOAuthAccountAvailable
 	}
+	f.oaRotateMu.Lock()
+	defer f.oaRotateMu.Unlock()
+
 	current := f.currentOAFile
 	candidates, wait := f.oaPool.availableCandidates(current, time.Now(), time.Duration(f.opt.OAuthAccountCooldown))
 	if len(candidates) == 0 {

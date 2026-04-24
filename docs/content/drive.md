@@ -368,6 +368,29 @@ oauth_account_cooldown = 15m
   changes; `client_id` and `client_secret` are preserved). Legacy files are
   overwritten with the new raw token blob. This keeps tokens valid across
   rclone restarts regardless of format.
+- OAuth rotation is serialized under concurrent retries. When multiple mount or
+  transfer workers hit `403 userRateLimitExceeded` at the same time, rclone now
+  performs one account switch at a time so the whole candidate pool does not get
+  pushed into cooldown at once.
+- Drive quota and rate-limit events now emit `INFO` logs with rotation context.
+  The log includes the current account, alternate accounts being tried, the
+  account selected after a successful switch, and a cooldown summary when every
+  candidate is temporarily unavailable.
+
+Typical `INFO` logs look like this:
+
+```text
+INFO  : Google drive root '': Google Drive API 403 userRateLimitExceeded: User rate limit exceeded.
+INFO  : Google drive root '': Drive error "userRateLimitExceeded" on OAuth account "w25929138@gmail.com.json"; trying 3 alternate account(s): [noreply.randallanjie@gmail.com.json, randallzhuanjie@gmail.com.json, turkiye.randall@gmail.com.json]
+INFO  : Google drive root '': Changing OAuth account from "w25929138@gmail.com.json" to "noreply.randallanjie@gmail.com.json"
+INFO  : Google drive root '': Switched OAuth account from "w25929138@gmail.com.json" to "noreply.randallanjie@gmail.com.json" after Drive error "userRateLimitExceeded"
+```
+
+When every configured account is cooling down, you will see a log like this:
+
+```text
+INFO  : Google drive root '': Drive error "userRateLimitExceeded" on OAuth account "w25929138@gmail.com.json"; all 4 alternates are cooling down for up to 11h44m; cooldowns=[noreply.randallanjie@gmail.com.json=11h44m, randallzhuanjie@gmail.com.json=8h12m, turkiye.randall@gmail.com.json=2h1m, w25929138@gmail.com.json=11h44m]
+```
 
 ### Shared drives (team drives)
 

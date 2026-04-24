@@ -182,6 +182,9 @@ Please see the [rclone website](https://rclone.org/) for:
 - [Forum](https://forum.rclone.org/)
 - ...and more
 
+Google Drive users who rotate between multiple OAuth accounts can find setup
+and logging details in the Drive docs under “OAuth account rotation”.
+
 ## Downloads
 
 - <https://rclone.org/downloads/>

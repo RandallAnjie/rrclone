@@ -21,6 +21,48 @@
 Rclone *("rsync for cloud storage")* is a command-line program to sync files and
 directories to and from different cloud storage providers.
 
+## This fork: what's different from upstream rclone
+
+This repository tracks upstream rclone and adds a focused set of Google Drive
+rotation improvements for high-volume upload and mount workloads.
+
+Current fork-specific changes include:
+
+- **OAuth account rotation for Google Drive**
+  - Adds `--drive-oauth-account-files`
+  - Lets a single Drive remote rotate across multiple regular OAuth accounts
+  - Supports JSON files, directories, and glob patterns
+
+- **Structured per-account OAuth credentials**
+  - Account files can contain `client_id`, `client_secret`, and `token`
+  - Lets each Google account use its own OAuth app/project
+  - Rotation switches the whole credential set atomically
+
+- **Automatic token persistence per rotated account**
+  - Refreshed tokens are written back to the same account file
+  - Works for both legacy raw-token files and structured account files
+
+- **More robust token refresh behavior**
+  - Handles token files with missing or zero `expiry`
+  - Forces refresh when needed so stale access tokens do not get reused forever
+
+- **OAuth rotation on more Drive auth failures**
+  - Rotation also covers `authError` in addition to quota and rate-limit errors
+
+- **Serialized OAuth rotation under concurrent 403 retries**
+  - Prevents multiple concurrent workers from switching accounts at the same time
+  - Avoids pushing the whole candidate pool into cooldown at once during mount or
+    upload bursts
+
+- **Improved Drive rate-limit logging**
+  - `403 userRateLimitExceeded` and related Drive quota/rate-limit events now emit
+    clear `INFO` logs
+  - Logs include the current account, alternate accounts being tried, successful
+    switches, and cooldown summaries when every account is temporarily unavailable
+
+These changes are documented in the Google Drive docs under
+**“OAuth account rotation”**.
+
 ## Storage providers
 
 - 1Fichier [:page_facing_up:](https://rclone.org/fichier/)

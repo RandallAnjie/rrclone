@@ -18,50 +18,45 @@
 
 # Rclone
 
-Rclone *("rsync for cloud storage")* is a command-line program to sync files and
-directories to and from different cloud storage providers.
+Rclone *("rsync for cloud storage")* 是一个用于在各种云存储之间同步文件和目录的命令行工具。
 
-## This fork: what's different from upstream rclone
+## 这个分支相比原版 rclone 更新了什么
 
-This repository tracks upstream rclone and adds a focused set of Google Drive
-rotation improvements for high-volume upload and mount workloads.
+这个仓库基于上游 rclone 持续同步，额外补了一组更适合 Google Drive 大量上传、挂载和多账号轮换场景的增强能力。
 
-Current fork-specific changes include:
+当前这个分支相对原版 rclone，主要增加了这些内容：
 
-- **OAuth account rotation for Google Drive**
-  - Adds `--drive-oauth-account-files`
-  - Lets a single Drive remote rotate across multiple regular OAuth accounts
-  - Supports JSON files, directories, and glob patterns
+- **Google Drive 多 OAuth 账号轮换**
+  - 新增 `--drive-oauth-account-files`
+  - 一个 Drive remote 可以在多个普通 Google OAuth 账号之间自动切换
+  - 支持直接传 JSON 文件、目录、glob 模式
 
-- **Structured per-account OAuth credentials**
-  - Account files can contain `client_id`, `client_secret`, and `token`
-  - Lets each Google account use its own OAuth app/project
-  - Rotation switches the whole credential set atomically
+- **支持结构化账号文件**
+  - 每个账号文件除了 `token`，还可以独立保存 `client_id` 和 `client_secret`
+  - 适合每个 Google 账号对应不同 OAuth App / Project 的场景
+  - 切换账号时会原子性切换整套凭证
 
-- **Automatic token persistence per rotated account**
-  - Refreshed tokens are written back to the same account file
-  - Works for both legacy raw-token files and structured account files
+- **轮换账号的 token 自动回写**
+  - 某个账号刷新出新 token 后，会自动写回它自己的账号文件
+  - 同时兼容旧格式 raw token 文件和新的结构化账号文件
 
-- **More robust token refresh behavior**
-  - Handles token files with missing or zero `expiry`
-  - Forces refresh when needed so stale access tokens do not get reused forever
+- **更稳的 token 刷新行为**
+  - 对缺失 `expiry` 或 `expiry` 为零值的 token 文件做兼容处理
+  - 需要时强制 refresh，避免一直复用已经失效的 access token
 
-- **OAuth rotation on more Drive auth failures**
-  - Rotation also covers `authError` in addition to quota and rate-limit errors
+- **更多 Drive 错误会触发账号轮换**
+  - 除了 quota / rate limit 相关错误
+  - `authError` 现在也会触发 OAuth 账号切换
 
-- **Serialized OAuth rotation under concurrent 403 retries**
-  - Prevents multiple concurrent workers from switching accounts at the same time
-  - Avoids pushing the whole candidate pool into cooldown at once during mount or
-    upload bursts
+- **并发 403 场景下串行执行 OAuth 轮换**
+  - 避免多个并发 worker 同时触发切号
+  - 避免 mount / upload 高并发时把整个候选账号池瞬间一起打进 cooldown
 
-- **Improved Drive rate-limit logging**
-  - `403 userRateLimitExceeded` and related Drive quota/rate-limit events now emit
-    clear `INFO` logs
-  - Logs include the current account, alternate accounts being tried, successful
-    switches, and cooldown summaries when every account is temporarily unavailable
+- **更清晰的 Drive 限流日志**
+  - `403 userRateLimitExceeded` 以及相关 quota / rate-limit 错误会输出更明确的 `INFO` 日志
+  - 日志里会带上当前账号、正在尝试的候选账号、切换成功后的账号，以及所有账号都在 cooldown 时的摘要信息
 
-These changes are documented in the Google Drive docs under
-**“OAuth account rotation”**.
+这些增强能力的详细说明，可以看 Google Drive 文档里的 **“OAuth account rotation”** 章节。
 
 ## Storage providers
 

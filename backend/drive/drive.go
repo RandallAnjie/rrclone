@@ -893,6 +893,7 @@ type Fs struct {
 	saPool           *serviceAccountPool
 	oaPool           *serviceAccountPool // pool for regular OAuth account rotation
 	currentOAFile    string              // active oauth account file (empty = default account)
+	oaRotateMu       sync.Mutex          // serialize OAuth account rotation under concurrent rate-limit errors
 }
 
 type serviceAccountPool struct {
@@ -987,6 +988,98 @@ func (p *serviceAccountPool) availableCandidates(current string, now time.Time, 
 		}
 	}
 	return candidates, wait
+}
+
+func (p *serviceAccountPool) fileCount() int {
+	if p == nil {
+		return 0
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.files)
+}
+
+func (p *serviceAccountPool) cooldownSnapshot(now time.Time) map[string]time.Duration {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make(map[string]time.Duration, len(p.files))
+	for _, file := range p.files {
+		until := p.cooldowns[file]
+		if until.IsZero() || !until.After(now) {
+			out[file] = 0
+			continue
+		}
+		out[file] = time.Until(until)
+		if out[file] < 0 {
+			out[file] = 0
+		}
+	}
+	return out
+}
+
+func formatAccountShort(path string) string {
+	if path == "" {
+		return "default"
+	}
+	return filepath.Base(path)
+}
+
+func formatAccountList(paths []string) string {
+	if len(paths) == 0 {
+		return "[]"
+	}
+	items := make([]string, 0, len(paths))
+	for _, p := range paths {
+		items = append(items, formatAccountShort(p))
+	}
+	return "[" + strings.Join(items, ", ") + "]"
+}
+
+func formatCooldownSummary(snapshot map[string]time.Duration) string {
+	if len(snapshot) == 0 {
+		return "[]"
+	}
+	keys := make([]string, 0, len(snapshot))
+	for k := range snapshot {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%v", formatAccountShort(k), snapshot[k].Round(time.Second)))
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+func shouldElevateDriveRateLimit(reason string) bool {
+	switch reason {
+	case "rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded", "storageQuotaExceeded":
+		return true
+	default:
+		return false
+	}
+}
+
+func driveRateLimitMessage(err error) string {
+	var gerr *googleapi.Error
+	if !errors.As(err, &gerr) || len(gerr.Errors) == 0 {
+		return ""
+	}
+	reason := gerr.Errors[0].Reason
+	if !shouldElevateDriveRateLimit(reason) {
+		return ""
+	}
+	msg := gerr.Errors[0].Message
+	if msg == "" {
+		msg = gerr.Message
+	}
+	if msg == "" {
+		msg = err.Error()
+	}
+	return fmt.Sprintf("Google Drive API %d %s: %s", gerr.Code, reason, msg)
 }
 
 func parseServiceAccountFiles(spec string) ([]string, error) {
@@ -1140,6 +1233,11 @@ func (f *Fs) shouldRetry(ctx context.Context, err error) (bool, error) {
 		}
 		if len(gerr.Errors) > 0 {
 			reason := gerr.Errors[0].Reason
+			if shouldElevateDriveRateLimit(reason) {
+				if msg := driveRateLimitMessage(err); msg != "" {
+					fs.Infof(f, "%s", msg)
+				}
+			}
 			if shouldRotateServiceAccount(reason) {
 				if f.saPool != nil {
 					if rotateErr := f.rotateServiceAccount(ctx, reason, err); rotateErr == nil {
@@ -1773,24 +1871,32 @@ func (f *Fs) rotateOAuthAccount(ctx context.Context, reason string, cause error)
 	if f.oaPool == nil || f.opt.OAuthAccountCooldown <= 0 {
 		return errNoOAuthAccountAvailable
 	}
+	f.oaRotateMu.Lock()
+	defer f.oaRotateMu.Unlock()
+
 	current := f.currentOAFile
-	candidates, wait := f.oaPool.availableCandidates(current, time.Now(), time.Duration(f.opt.OAuthAccountCooldown))
+	now := time.Now()
+	candidates, wait := f.oaPool.availableCandidates(current, now, time.Duration(f.opt.OAuthAccountCooldown))
 	if len(candidates) == 0 {
+		snapshot := formatCooldownSummary(f.oaPool.cooldownSnapshot(time.Now()))
 		if wait > 0 {
-			fs.Debugf(f, "OAuth account %q hit %s, all alternates are cooling down for up to %v", current, reason, wait)
+			fs.Infof(f, "Drive error %q on OAuth account %q; all %d alternates are cooling down for up to %v; cooldowns=%s", reason, formatAccountShort(current), f.oaPool.fileCount(), wait.Round(time.Second), snapshot)
 		}
 		return errNoOAuthAccountAvailable
 	}
+
+	fs.Infof(f, "Drive error %q on OAuth account %q; trying %d alternate account(s): %s", reason, formatAccountShort(current), len(candidates), formatAccountList(candidates))
+
 	var changeErr error
 	for _, candidate := range candidates {
 		changeErr = f.changeOAuthAccountFile(ctx, candidate)
 		if changeErr == nil {
 			f.oaPool.add(candidate)
-			fs.Infof(f, "Switched OAuth account from %q to %q after Drive error %q", current, candidate, reason)
+			fs.Infof(f, "Switched OAuth account from %q to %q after Drive error %q", formatAccountShort(current), formatAccountShort(candidate), reason)
 			return nil
 		}
 		f.oaPool.markCooldown(candidate, time.Now().Add(time.Duration(f.opt.OAuthAccountCooldown)))
-		fs.Errorf(f, "Failed to switch OAuth account from %q to %q after %q: %v", current, candidate, reason, changeErr)
+		fs.Infof(f, "Failed switching OAuth account from %q to %q after Drive error %q: %v", formatAccountShort(current), formatAccountShort(candidate), reason, changeErr)
 	}
 	if changeErr == nil {
 		changeErr = cause
@@ -1799,7 +1905,7 @@ func (f *Fs) rotateOAuthAccount(ctx context.Context, reason string, cause error)
 }
 
 func (f *Fs) changeOAuthAccountFile(ctx context.Context, file string) (err error) {
-	fs.Debugf(nil, "Changing OAuth account file from %q to %q", f.currentOAFile, file)
+	fs.Infof(f, "Changing OAuth account from %q to %q", formatAccountShort(f.currentOAFile), formatAccountShort(file))
 	if file == f.currentOAFile {
 		return nil
 	}

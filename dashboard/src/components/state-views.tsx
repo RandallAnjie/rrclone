@@ -12,6 +12,28 @@ export function LoadingState({ label = "正在读取 rclone 状态…" }: { labe
   );
 }
 
+export function SoftNotice({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry?: () => void;
+}) {
+  return (
+    <Alert status="warning" className="mb-4">
+      <Alert.Content>
+        <Alert.Title>部分数据暂时不可用</Alert.Title>
+        <Alert.Description>{message}。已保留上一轮成功结果。</Alert.Description>
+        {onRetry ? (
+          <Button className="mt-3" size="sm" variant="secondary" onPress={onRetry}>
+            重试
+          </Button>
+        ) : null}
+      </Alert.Content>
+    </Alert>
+  );
+}
+
 export function ErrorState({
   message,
   onRetry,

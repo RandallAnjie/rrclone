@@ -11,3 +11,37 @@ body {
   background: var(--background);
   color: var(--foreground);
 }
+
+.live-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: var(--muted);
+  display: inline-block;
+}
+
+.live-dot.is-live {
+  background: var(--success);
+  box-shadow: 0 0 0 0 color-mix(in oklab, var(--success) 55%, transparent);
+  animation: live-pulse 1.8s ease-out infinite;
+}
+
+@keyframes live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--success) 50%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 0.55rem transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.chart-panel {
+  min-height: 16.5rem;
+}
+
+.chart-panel-lg {
+  min-height: 20rem;
+}

@@ -151,7 +151,10 @@ export function AppShell({
         <Navbar.Content>
           <Chip color={connected ? "success" : version.loading ? "default" : "danger"} size="sm">
             <Chip.Label>
-              {connected ? "已连接" : version.loading ? "连接中" : "未连接"}
+              <span className="inline-flex items-center gap-2">
+                <span className={`live-dot ${connected ? "is-live" : ""}`} aria-hidden />
+                {connected ? "已连接" : version.loading ? "连接中" : "未连接"}
+              </span>
             </Chip.Label>
           </Chip>
           <span className="hidden text-sm text-muted md:inline">
@@ -175,7 +178,9 @@ export function AppShell({
       sidebar={sidebar}
       navbar={navbar}
     >
-      <div className="px-6 py-6">{children}</div>
+      <div className="px-6 py-6" key={pathname}>
+        {children}
+      </div>
     </AppLayout>
   );
 }

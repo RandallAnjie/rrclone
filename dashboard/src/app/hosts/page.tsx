@@ -2,6 +2,7 @@
 
 import { Button, Chip, Input, Label, Modal, Table, TextField, useOverlayState } from "@heroui/react";
 import { useState } from "react";
+import { MotionPage } from "@/components/motion-ui";
 import { PageHeader } from "@/components/page-header";
 import { useHosts } from "@/components/host-provider";
 import { normalizeHostUrl } from "@/lib/rc/format";
@@ -67,7 +68,7 @@ export default function HostsPage() {
   }
 
   return (
-    <div>
+    <MotionPage>
       <PageHeader
         title="主机"
         description="现在默认管理本机 rclone RC。以后要管多台机器，只要再加一个 RC 地址。"
@@ -181,6 +182,6 @@ export default function HostsPage() {
           </Modal.Container>
         </Modal.Backdrop>
       </Modal>
-    </div>
+    </MotionPage>
   );
 }

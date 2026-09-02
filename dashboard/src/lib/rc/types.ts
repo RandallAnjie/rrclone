@@ -139,6 +139,19 @@ export type OperationsAbout = {
   trashed?: number;
 };
 
+export type VfsStats = {
+  diskCache?: {
+    bytesUsed?: number;
+    files?: number;
+    erroredFiles?: number;
+  };
+  inUse?: number;
+  metadataCache?: {
+    dirs?: number;
+    files?: number;
+  };
+};
+
 export type OverviewSnapshot = {
   version: CoreVersion;
   pid: CorePid;

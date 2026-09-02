@@ -35,7 +35,7 @@ export default function MountsPage() {
         <ErrorState message={mounts.error} onRetry={() => void mounts.refresh()} />
       ) : null}
       {mounts.stale ? <SoftNotice message={`挂载列表暂时失败：${mounts.error}`} /> : null}
-      {vfs.error && !vfs.data ? (
+      {vfs.error && !vfs.data && !/no VFS active/i.test(vfs.error) ? (
         <SoftNotice message={`VFS：${vfs.error}`} onRetry={() => void vfs.refresh()} />
       ) : null}
       <Stagger className="mb-6 grid gap-4 lg:grid-cols-2">

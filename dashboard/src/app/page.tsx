@@ -1,11 +1,14 @@
 "use client";
 
-import { Card, Chip, ProgressBar, Table } from "@heroui/react";
+import { Widget } from "@heroui-pro/react/widget";
+import { Chip, ProgressBar, Table } from "@heroui/react";
+import { useEffect, useRef, useState } from "react";
 import { KpiCard } from "@/components/kpi-card";
 import { PageHeader } from "@/components/page-header";
 import { ErrorState, LoadingState } from "@/components/state-views";
 import { useHosts } from "@/components/host-provider";
 import { formatBytes, formatDuration, formatPercent, formatSpeed } from "@/lib/rc/format";
+import { appendSparkline } from "@/lib/rc/sparkline";
 import { useRc } from "@/lib/rc/use-rc";
 import type {
   ConfigListRemotes,
@@ -26,6 +29,8 @@ export default function OverviewPage() {
   const remotes = useRc<ConfigListRemotes>(host, "config/listremotes", { intervalMs: 8000 });
   const jobs = useRc<JobList>(host, "job/list", { intervalMs: 4000 });
   const mounts = useRc<MountList>(host, "mount/listmounts", { intervalMs: 8000 });
+  const [speedHistory, setSpeedHistory] = useState<Array<{ value: number }>>([]);
+  const lastHostId = useRef(host.id);
 
   const error =
     version.error || pid.error || mem.error || stats.error || remotes.error || jobs.error;
@@ -34,6 +39,20 @@ export default function OverviewPage() {
     (version.loading || stats.loading) &&
     !version.data &&
     !stats.data;
+
+  useEffect(() => {
+    const sample = stats.data?.speed;
+    const starter = window.setTimeout(() => {
+      setSpeedHistory((prev) => {
+        if (lastHostId.current !== host.id) {
+          lastHostId.current = host.id;
+          return appendSparkline([], sample);
+        }
+        return appendSparkline(prev, sample);
+      });
+    }, 0);
+    return () => window.clearTimeout(starter);
+  }, [host.id, stats.data]);
 
   return (
     <div>
@@ -58,6 +77,8 @@ export default function OverviewPage() {
               label="传输速度"
               value={formatSpeed(stats.data?.speed)}
               hint={`已传输 ${formatBytes(stats.data?.bytes)}`}
+              chart={speedHistory}
+              status={(stats.data?.errors ?? 0) > 0 ? "warning" : "success"}
             />
             <KpiCard
               label="进行中"
@@ -68,6 +89,7 @@ export default function OverviewPage() {
               label="错误"
               value={stats.data?.errors ?? 0}
               hint={stats.data?.lastError || "没有最近错误"}
+              status={(stats.data?.errors ?? 0) > 0 ? "danger" : "success"}
             />
             <KpiCard
               label="远程 / 任务 / 挂载"
@@ -77,12 +99,12 @@ export default function OverviewPage() {
           </div>
 
           <div className="grid gap-4 xl:grid-cols-3">
-            <Card className="xl:col-span-2">
-              <Card.Header>
-                <Card.Title>正在传输</Card.Title>
-                <Card.Description>来自 core/stats，每 2 秒刷新。</Card.Description>
-              </Card.Header>
-              <Card.Content>
+            <Widget className="xl:col-span-2">
+              <Widget.Header>
+                <Widget.Title>正在传输</Widget.Title>
+                <Widget.Description>来自 core/stats，每 2 秒刷新。</Widget.Description>
+              </Widget.Header>
+              <Widget.Content>
                 {(stats.data?.transferring?.length ?? 0) === 0 ? (
                   <p className="py-6 text-sm text-muted">当前没有活动传输。</p>
                 ) : (
@@ -122,15 +144,15 @@ export default function OverviewPage() {
                     </Table.ScrollContainer>
                   </Table>
                 )}
-              </Card.Content>
-            </Card>
+              </Widget.Content>
+            </Widget>
 
-            <Card>
-              <Card.Header>
-                <Card.Title>进程</Card.Title>
-                <Card.Description>core/version 和 core/memstats</Card.Description>
-              </Card.Header>
-              <Card.Content className="space-y-3 text-sm">
+            <Widget>
+              <Widget.Header>
+                <Widget.Title>进程</Widget.Title>
+                <Widget.Description>core/version 和 core/memstats</Widget.Description>
+              </Widget.Header>
+              <Widget.Content className="space-y-3 text-sm">
                 <Row label="版本" value={version.data?.version ?? "—"} />
                 <Row label="系统" value={version.data?.osVersion ?? version.data?.os ?? "—"} />
                 <Row label="Go" value={version.data?.goVersion ?? "—"} />
@@ -151,8 +173,8 @@ export default function OverviewPage() {
                     </Chip>
                   ) : null}
                 </div>
-              </Card.Content>
-            </Card>
+              </Widget.Content>
+            </Widget>
           </div>
         </div>
       ) : null}

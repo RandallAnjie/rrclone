@@ -1,4 +1,7 @@
-import { Alert, Button, EmptyState, Spinner } from "@heroui/react";
+"use client";
+
+import { EmptyState } from "@heroui-pro/react/empty-state";
+import { Alert, Button, Spinner } from "@heroui/react";
 
 export function LoadingState({ label = "正在读取 rclone 状态…" }: { label?: string }) {
   return (
@@ -38,8 +41,10 @@ export function ErrorState({
 export function BlankState({ title, description }: { title: string; description: string }) {
   return (
     <EmptyState className="py-10">
-      <p className="text-sm font-medium">{title}</p>
-      <p className="mt-1 text-sm text-muted">{description}</p>
+      <EmptyState.Header>
+        <EmptyState.Title>{title}</EmptyState.Title>
+        <EmptyState.Description>{description}</EmptyState.Description>
+      </EmptyState.Header>
     </EmptyState>
   );
 }

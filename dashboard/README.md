@@ -47,7 +47,15 @@ npm run dev
 
 ## UI
 
-界面用 [HeroUI v3](https://heroui.com)（`@heroui/react` + `@heroui/styles`）。HeroUI Pro 的组件包需要有效的 `HEROUI_AUTH_TOKEN`（CI/CD license key，不是 personal token）才能在安装时拉下 Pro artifact。环境里的 personal token 无法通过 Pro 安装，所以看板按 Pro 的 AppLayout / Sidebar / KPI / Widget 结构用 OSS 组件搭好了。拿到 CI/CD token 之后可以再换成 `@heroui-pro/react` 的现成壳。
+界面用 [HeroUI Pro](https://heroui.pro)（`@heroui-pro/react`）加上 HeroUI OSS v3（`@heroui/react` + `@heroui/styles`）。壳是 Pro 的 `AppLayout` / `Sidebar` / `Navbar`，概览用 Pro `KPI` / `Widget`。
+
+`npm install` 需要 [HeroUI 控制台](https://heroui.pro/dashboard) 里的 **CI/CD license key**，写成环境变量 `HEROUI_AUTH_TOKEN`。这不是 MCP 用的 personal token。参考 [CI/CD 安装说明](https://heroui.pro/docs/react/getting-started/installation#cicd)。
+
+```bash
+export HEROUI_AUTH_TOKEN=your-cicd-token
+cd dashboard
+npm install
+```
 
 ## 开发
 

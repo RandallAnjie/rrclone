@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
 import { AppShell } from "@/components/app-shell";
 import { HostProvider } from "@/components/host-provider";
@@ -19,7 +20,10 @@ export const metadata: Metadata = {
   description: "管理本机 rclone RC 状态，后续可扩展到多机器",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  const store = await cookies();
+  const defaultSidebarOpen = store.get("sidebar_state")?.value !== "false";
+
   return (
     <html
       lang="zh-CN"
@@ -28,7 +32,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full bg-background text-foreground">
         <HostProvider>
-          <AppShell>{children}</AppShell>
+          <AppShell defaultSidebarOpen={defaultSidebarOpen}>{children}</AppShell>
         </HostProvider>
       </body>
     </html>

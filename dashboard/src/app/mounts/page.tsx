@@ -4,8 +4,8 @@ import { Table } from "@heroui/react";
 import { PageHeader } from "@/components/page-header";
 import { BlankState, ErrorState, LoadingState } from "@/components/state-views";
 import { useHosts } from "@/components/host-provider";
-import { useRc } from "@/lib/rclone/use-rc";
-import type { MountList } from "@/lib/rclone/types";
+import { useRc } from "@/lib/rc/use-rc";
+import type { MountList } from "@/lib/rc/types";
 
 export default function MountsPage() {
   const { host } = useHosts();

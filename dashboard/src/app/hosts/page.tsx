@@ -4,8 +4,8 @@ import { Button, Chip, Input, Label, Modal, Table, TextField, useOverlayState } 
 import { useState } from "react";
 import { PageHeader } from "@/components/page-header";
 import { useHosts } from "@/components/host-provider";
-import { normalizeHostUrl } from "@/lib/rclone/format";
-import type { Host } from "@/lib/rclone/types";
+import { normalizeHostUrl } from "@/lib/rc/format";
+import type { Host } from "@/lib/rc/types";
 
 type Draft = {
   name: string;

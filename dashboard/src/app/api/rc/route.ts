@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { normalizeHostUrl } from "@/lib/rclone/format";
+import { normalizeHostUrl } from "@/lib/rc/format";
 
 type RcRequest = {
   url?: string;

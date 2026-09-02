@@ -5,8 +5,8 @@ import { KpiCard } from "@/components/kpi-card";
 import { PageHeader } from "@/components/page-header";
 import { ErrorState, LoadingState } from "@/components/state-views";
 import { useHosts } from "@/components/host-provider";
-import { formatBytes, formatDuration, formatPercent, formatSpeed } from "@/lib/rclone/format";
-import { useRc } from "@/lib/rclone/use-rc";
+import { formatBytes, formatDuration, formatPercent, formatSpeed } from "@/lib/rc/format";
+import { useRc } from "@/lib/rc/use-rc";
 import type {
   ConfigListRemotes,
   CoreMemStats,
@@ -15,7 +15,7 @@ import type {
   CoreVersion,
   JobList,
   MountList,
-} from "@/lib/rclone/types";
+} from "@/lib/rc/types";
 
 export default function OverviewPage() {
   const { host } = useHosts();

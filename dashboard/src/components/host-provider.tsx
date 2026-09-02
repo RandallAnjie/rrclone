@@ -8,7 +8,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { normalizeHostUrl } from "@/lib/rclone/format";
+import { normalizeHostUrl } from "@/lib/rc/format";
 import {
   createHostId,
   defaultHosts,
@@ -19,8 +19,8 @@ import {
   saveHosts,
   saveSelectedHostId,
   SELECTED_HOST_STORAGE_KEY,
-} from "@/lib/rclone/hosts";
-import type { Host } from "@/lib/rclone/types";
+} from "@/lib/rc/hosts";
+import type { Host } from "@/lib/rc/types";
 
 type HostDraft = {
   name: string;

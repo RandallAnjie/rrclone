@@ -4,9 +4,9 @@ import { Chip, ProgressBar, Table, Tabs } from "@heroui/react";
 import { PageHeader } from "@/components/page-header";
 import { BlankState, ErrorState, LoadingState } from "@/components/state-views";
 import { useHosts } from "@/components/host-provider";
-import { formatBytes, formatDuration, formatPercent, formatSpeed, formatTime } from "@/lib/rclone/format";
-import { useRc } from "@/lib/rclone/use-rc";
-import type { CoreStats, CoreTransferred } from "@/lib/rclone/types";
+import { formatBytes, formatDuration, formatPercent, formatSpeed, formatTime } from "@/lib/rc/format";
+import { useRc } from "@/lib/rc/use-rc";
+import type { CoreStats, CoreTransferred } from "@/lib/rc/types";
 
 export default function TransfersPage() {
   const { host } = useHosts();

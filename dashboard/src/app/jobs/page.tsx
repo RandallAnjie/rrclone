@@ -5,10 +5,10 @@ import { useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/page-header";
 import { BlankState, ErrorState, LoadingState } from "@/components/state-views";
 import { useHosts } from "@/components/host-provider";
-import { rcCall } from "@/lib/rclone/client";
-import { formatDuration } from "@/lib/rclone/format";
-import { useRc } from "@/lib/rclone/use-rc";
-import type { JobList, JobStatus } from "@/lib/rclone/types";
+import { rcCall } from "@/lib/rc/client";
+import { formatDuration } from "@/lib/rc/format";
+import { useRc } from "@/lib/rc/use-rc";
+import type { JobList, JobStatus } from "@/lib/rc/types";
 
 export default function JobsPage() {
   const { host } = useHosts();

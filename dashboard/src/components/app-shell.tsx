@@ -4,8 +4,8 @@ import { Button, Chip, ListBox, Select } from "@heroui/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
-import { useRc } from "@/lib/rclone/use-rc";
-import type { CoreVersion } from "@/lib/rclone/types";
+import { useRc } from "@/lib/rc/use-rc";
+import type { CoreVersion } from "@/lib/rc/types";
 import { useHosts } from "./host-provider";
 import {
   HostsIcon,

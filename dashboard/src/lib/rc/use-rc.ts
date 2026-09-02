@@ -15,6 +15,9 @@ export function useRc<T>(host: Host | null, path: string, options: UseRcOptions 
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const paramsKey = JSON.stringify(params ?? {});
+  const hostKey = host
+    ? `${host.id}\0${host.url}\0${host.user ?? ""}\0${host.pass ?? ""}`
+    : "";
   const loading = Boolean(host && enabled && data === null && error === null);
 
   const refresh = useCallback(async () => {
@@ -28,28 +31,29 @@ export function useRc<T>(host: Host | null, path: string, options: UseRcOptions 
     } catch (err) {
       setError(err instanceof Error ? err.message : "请求失败");
     }
-    // params is represented by paramsKey so the callback stays stable.
+    // host/params identity is captured via hostKey/paramsKey.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, host, paramsKey, path]);
+  }, [enabled, hostKey, paramsKey, path]);
 
   useEffect(() => {
     if (!host || !enabled) {
       return;
     }
-    // Poll rclone RC. The official hook lint treats any setState from a
-    // fetch as a render cascade, but this is an external subscription.
+    let cancelled = false;
     const run = () => {
-      void refresh();
+      if (!cancelled) {
+        void refresh();
+      }
     };
-    const starter = window.setTimeout(run, 0);
+    run();
     const timer = intervalMs ? window.setInterval(run, intervalMs) : 0;
     return () => {
-      window.clearTimeout(starter);
+      cancelled = true;
       if (timer) {
         window.clearInterval(timer);
       }
     };
-  }, [enabled, host, intervalMs, refresh]);
+  }, [enabled, host, hostKey, intervalMs, refresh]);
 
   return { data, error, loading, refresh };
 }

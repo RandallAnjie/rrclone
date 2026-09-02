@@ -10,10 +10,37 @@ import { formatDuration } from "@/lib/rc/format";
 import { useRc } from "@/lib/rc/use-rc";
 import type { JobList, JobStatus } from "@/lib/rc/types";
 
+const MAX_FINISHED = 40;
+
+function pickJobIds(list: JobList | null): number[] {
+  if (!list) {
+    return [];
+  }
+  const running = list.runningIds ?? [];
+  const finished = list.finishedIds ?? list.jobids ?? [];
+  const recentFinished = finished.slice(-MAX_FINISHED);
+  return [...new Set([...running, ...recentFinished])].sort((a, b) => b - a);
+}
+
+async function mapPool<T, R>(items: T[], concurrency: number, worker: (item: T) => Promise<R>) {
+  const results = new Array<R>(items.length);
+  let index = 0;
+  async function run() {
+    while (index < items.length) {
+      const current = index;
+      index += 1;
+      results[current] = await worker(items[current]!);
+    }
+  }
+  const runners = Array.from({ length: Math.min(concurrency, items.length) }, () => run());
+  await Promise.all(runners);
+  return results;
+}
+
 export default function JobsPage() {
   const { host } = useHosts();
   const list = useRc<JobList>(host, "job/list", { intervalMs: 3000 });
-  const ids = useMemo(() => list.data?.jobids ?? [], [list.data]);
+  const ids = useMemo(() => pickJobIds(list.data), [list.data]);
   const [jobs, setJobs] = useState<JobStatus[]>([]);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -24,9 +51,16 @@ export default function JobsPage() {
       if (!list.data) {
         return;
       }
+      if (ids.length === 0) {
+        if (!cancelled) {
+          setJobs([]);
+          setDetailError(null);
+        }
+        return;
+      }
       try {
-        const next = await Promise.all(
-          ids.map((jobid) => rcCall<JobStatus>(host, "job/status", { jobid })),
+        const next = await mapPool(ids, 6, (jobid) =>
+          rcCall<JobStatus>(host, "job/status", { jobid }),
         );
         if (!cancelled) {
           setJobs(next);
@@ -57,10 +91,17 @@ export default function JobsPage() {
   }
 
   const error = list.error || detailError;
+  const totalKnown =
+    (list.data?.runningIds?.length ?? 0) + (list.data?.finishedIds?.length ?? list.data?.jobids?.length ?? 0);
 
   return (
     <div>
-      <PageHeader title="任务" description="异步 RC 任务来自 job/list 和 job/status。" />
+      <PageHeader
+        title="任务"
+        description={`异步 RC 任务来自 job/list 和 job/status。当前展示运行中 + 最近 ${MAX_FINISHED} 条完成记录${
+          totalKnown > ids.length ? `（共 ${totalKnown}）` : ""
+        }。`}
+      />
       {list.loading && !list.data ? <LoadingState /> : null}
       {error ? <ErrorState message={error} onRetry={() => void list.refresh()} /> : null}
       {!list.error && list.data && ids.length === 0 ? (

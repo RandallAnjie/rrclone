@@ -55,7 +55,10 @@ npm run dev
 export HEROUI_AUTH_TOKEN=your-cicd-token
 cd dashboard
 npm install
+npm run dev
 ```
+
+本地用 `http://127.0.0.1:3000` 访问时，`next.config.ts` 已配置 `allowedDevOrigins`，避免 Next.js 16 把本机开发资源当成跨域拦掉。
 
 ## 开发
 

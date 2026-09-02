@@ -31,7 +31,13 @@ function isActive(pathname: string, href: string) {
   return href === "/" ? pathname === "/" : pathname.startsWith(href);
 }
 
-function NavMenu({ pathname }: { pathname: string }) {
+function NavMenu({
+  pathname,
+  onNavigate,
+}: {
+  pathname: string;
+  onNavigate: (href: string) => void;
+}) {
   return (
     <Sidebar.Menu>
       {NAV.map((item) => {
@@ -43,6 +49,7 @@ function NavMenu({ pathname }: { pathname: string }) {
             href={item.href}
             isCurrent={isActive(pathname, item.href)}
             textValue={item.label}
+            onAction={() => onNavigate(item.href)}
           >
             <Sidebar.MenuIcon>
               <Icon />
@@ -77,6 +84,10 @@ export function AppShell({
   const version = useRc<CoreVersion>(host, "core/version", { intervalMs: 8000 });
   const connected = Boolean(version.data && !version.error);
 
+  const go = (href: string) => {
+    router.push(href);
+  };
+
   const sidebar = (
     <>
       <Sidebar>
@@ -86,7 +97,7 @@ export function AppShell({
         <Sidebar.Content>
           <Sidebar.Group>
             <Sidebar.GroupLabel>监控</Sidebar.GroupLabel>
-            <NavMenu pathname={pathname} />
+            <NavMenu pathname={pathname} onNavigate={go} />
           </Sidebar.Group>
         </Sidebar.Content>
         <Sidebar.Footer>
@@ -99,7 +110,7 @@ export function AppShell({
           <Brand />
         </Sidebar.Header>
         <Sidebar.Content>
-          <NavMenu pathname={pathname} />
+          <NavMenu pathname={pathname} onNavigate={go} />
         </Sidebar.Content>
       </Sidebar.Mobile>
     </>
@@ -157,7 +168,7 @@ export function AppShell({
   return (
     <AppLayout
       defaultSidebarOpen={defaultSidebarOpen}
-      navigate={router.push}
+      navigate={go}
       scrollMode="content"
       sidebarCollapsible="icon"
       sidebarVariant="inset"

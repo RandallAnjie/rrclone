@@ -38,10 +38,15 @@ body {
   }
 }
 
+.chart-panel,
+.chart-panel-lg {
+  width: 100%;
+}
+
 .chart-panel {
-  min-height: 16.5rem;
+  height: 17rem;
 }
 
 .chart-panel-lg {
-  min-height: 20rem;
+  height: 20.5rem;
 }

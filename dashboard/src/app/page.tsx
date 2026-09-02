@@ -2,17 +2,17 @@
 
 import { Widget } from "@heroui-pro/react/widget";
 import { Chip, ProgressBar, Table } from "@heroui/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DonutChart, HorizontalBars, MemoryAreaChart, SpeedAreaChart } from "@/components/charts";
 import { KpiCard } from "@/components/kpi-card";
 import { LiveDot, MotionPage, Rise, Stagger } from "@/components/motion-ui";
 import { PageHeader } from "@/components/page-header";
 import { ErrorState, LoadingState, SoftNotice } from "@/components/state-views";
 import { useHosts } from "@/components/host-provider";
+import { useStatsTrend } from "@/components/stats-trend-provider";
 import { rcCall } from "@/lib/rc/client";
 import { formatBytes, formatDuration, formatPercent, formatSpeed } from "@/lib/rc/format";
 import {
-  appendTrend,
   bytesSlices,
   jobStatusSlices,
   operationSlices,
@@ -21,15 +21,12 @@ import {
   sparkFromTrend,
   transferSizeBars,
   transferStatusSlices,
-  type TrendPoint,
 } from "@/lib/rc/insights";
 import { useRc } from "@/lib/rc/use-rc";
 import type {
   ConfigDump,
   CoreBwLimit,
-  CoreMemStats,
   CorePid,
-  CoreStats,
   CoreTransferred,
   CoreVersion,
   JobList,
@@ -41,16 +38,13 @@ export default function OverviewPage() {
   const { host } = useHosts();
   const version = useRc<CoreVersion>(host, "core/version", { intervalMs: 8000 });
   const pid = useRc<CorePid>(host, "core/pid", { intervalMs: 8000 });
-  const mem = useRc<CoreMemStats>(host, "core/memstats", { intervalMs: 4000 });
-  const stats = useRc<CoreStats>(host, "core/stats", { intervalMs: 2000 });
+  const { stats, mem, trend } = useStatsTrend();
   const dump = useRc<ConfigDump>(host, "config/dump", { intervalMs: 10000 });
   const jobs = useRc<JobList>(host, "job/list", { intervalMs: 4000 });
   const mounts = useRc<MountList>(host, "mount/listmounts", { intervalMs: 8000 });
   const bwlimit = useRc<CoreBwLimit>(host, "core/bwlimit", { intervalMs: 8000 });
   const done = useRc<CoreTransferred>(host, "core/transferred", { intervalMs: 4000 });
-  const [trend, setTrend] = useState<TrendPoint[]>([]);
   const [jobRows, setJobRows] = useState<JobStatus[]>([]);
-  const lastHostId = useRef(host.id);
 
   const fatal =
     (version.error && !version.data && stats.error && !stats.data) ||
@@ -63,19 +57,6 @@ export default function OverviewPage() {
     jobs.error && !jobs.data ? `任务：${jobs.error}` : null,
     mounts.error && !mounts.data ? `挂载：${mounts.error}` : null,
   ].filter((item): item is string => Boolean(item));
-
-  useEffect(() => {
-    const starter = window.setTimeout(() => {
-      setTrend((prev) => {
-        if (lastHostId.current !== host.id) {
-          lastHostId.current = host.id;
-          return appendTrend([], stats.data, mem.data);
-        }
-        return appendTrend(prev, stats.data, mem.data);
-      });
-    }, 0);
-    return () => window.clearTimeout(starter);
-  }, [host.id, mem.data, stats.data]);
 
   const runningIds = jobs.data?.runningIds ?? [];
   const runningKey = runningIds.join(",");

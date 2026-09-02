@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
 import { AppShell } from "@/components/app-shell";
 import { HostProvider } from "@/components/host-provider";
+import { StatsTrendProvider } from "@/components/stats-trend-provider";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -32,7 +33,9 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full bg-background text-foreground">
         <HostProvider>
-          <AppShell defaultSidebarOpen={defaultSidebarOpen}>{children}</AppShell>
+          <StatsTrendProvider>
+            <AppShell defaultSidebarOpen={defaultSidebarOpen}>{children}</AppShell>
+          </StatsTrendProvider>
         </HostProvider>
       </body>
     </html>

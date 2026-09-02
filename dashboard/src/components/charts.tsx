@@ -19,18 +19,22 @@ import {
 import type { ChartSlice, TrendPoint } from "@/lib/rc/insights";
 
 export const CHART_COLORS = [
-  "var(--accent)",
-  "var(--success)",
-  "var(--warning)",
-  "var(--danger)",
-  "oklch(0.72 0.13 250)",
-  "oklch(0.74 0.11 310)",
-  "oklch(0.78 0.08 80)",
+  "#8b9dff",
+  "#3dd68c",
+  "#f5a524",
+  "#f31260",
+  "#7dd3fc",
+  "#c084fc",
+  "#f5c451",
 ];
 
 function EmptyChart({ label }: { label: string }) {
   return (
-    <div className="flex h-full min-h-52 items-center justify-center text-sm text-muted">
+    <div
+      role="img"
+      aria-label={label}
+      className="flex h-full min-h-52 items-center justify-center text-sm text-muted"
+    >
       {label}
     </div>
   );
@@ -47,27 +51,28 @@ export function SpeedAreaChart({
     return <EmptyChart label="采集两点之后会画出速度曲线" />;
   }
   return (
+    <div className="h-full w-full" role="img" aria-label="速度与并发折线图">
     <ResponsiveContainer width="100%" height="100%">
       <AreaChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
         <defs>
           <linearGradient id="speedFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.35} />
-            <stop offset="100%" stopColor="var(--accent)" stopOpacity={0.02} />
+            <stop offset="0%" stopColor="#8b9dff" stopOpacity={0.35} />
+            <stop offset="100%" stopColor="#8b9dff" stopOpacity={0.02} />
           </linearGradient>
         </defs>
-        <CartesianGrid stroke="color-mix(in oklab, var(--border) 80%, transparent)" vertical={false} />
+        <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
         <XAxis dataKey="label" hide />
         <YAxis
           yAxisId="speed"
           width={64}
-          tick={{ fill: "var(--muted)", fontSize: 11 }}
+          tick={{ fill: "#9ba3b5", fontSize: 11 }}
           tickFormatter={(value: number) => speedFormatter(value).replace("/s", "")}
         />
         <YAxis
           yAxisId="count"
           orientation="right"
           width={28}
-          tick={{ fill: "var(--muted)", fontSize: 11 }}
+          tick={{ fill: "#9ba3b5", fontSize: 11 }}
           allowDecimals={false}
         />
         <Tooltip
@@ -84,7 +89,7 @@ export function SpeedAreaChart({
           type="monotone"
           dataKey="speed"
           name="速度"
-          stroke="var(--accent)"
+          stroke="#8b9dff"
           strokeWidth={2}
           fill="url(#speedFill)"
           isAnimationActive={data.length < 8}
@@ -94,13 +99,14 @@ export function SpeedAreaChart({
           type="monotone"
           dataKey="transferring"
           name="进行中"
-          stroke="var(--success)"
+          stroke="#3dd68c"
           strokeWidth={1.5}
           fill="transparent"
           isAnimationActive={data.length < 8}
         />
       </AreaChart>
     </ResponsiveContainer>
+    </div>
   );
 }
 
@@ -115,19 +121,20 @@ export function MemoryAreaChart({
     return <EmptyChart label="内存曲线将随轮询出现" />;
   }
   return (
+    <div className="h-full w-full" role="img" aria-label="堆内存折线图">
     <ResponsiveContainer width="100%" height="100%">
       <AreaChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
         <defs>
           <linearGradient id="heapFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="oklch(0.72 0.13 250)" stopOpacity={0.3} />
-            <stop offset="100%" stopColor="oklch(0.72 0.13 250)" stopOpacity={0.02} />
+            <stop offset="0%" stopColor="#7dd3fc" stopOpacity={0.3} />
+            <stop offset="100%" stopColor="#7dd3fc" stopOpacity={0.02} />
           </linearGradient>
         </defs>
-        <CartesianGrid stroke="color-mix(in oklab, var(--border) 80%, transparent)" vertical={false} />
+        <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
         <XAxis dataKey="label" hide />
         <YAxis
           width={56}
-          tick={{ fill: "var(--muted)", fontSize: 11 }}
+          tick={{ fill: "#9ba3b5", fontSize: 11 }}
           tickFormatter={(value: number) => bytesFormatter(value)}
         />
         <Tooltip content={<ChartTooltip.Content valueFormatter={(value) => bytesFormatter(Number(value))} />} />
@@ -135,13 +142,14 @@ export function MemoryAreaChart({
           type="monotone"
           dataKey="heap"
           name="堆内存"
-          stroke="oklch(0.72 0.13 250)"
+          stroke="#7dd3fc"
           strokeWidth={2}
           fill="url(#heapFill)"
           isAnimationActive={data.length < 8}
         />
       </AreaChart>
     </ResponsiveContainer>
+    </div>
   );
 }
 
@@ -158,6 +166,7 @@ export function DonutChart({
     return <EmptyChart label={emptyLabel} />;
   }
   return (
+    <div className="h-full w-full" role="img" aria-label="占比饼图">
     <ResponsiveContainer width="100%" height="100%">
       <PieChart>
         <Pie
@@ -186,6 +195,7 @@ export function DonutChart({
         />
       </PieChart>
     </ResponsiveContainer>
+    </div>
   );
 }
 
@@ -202,15 +212,16 @@ export function HorizontalBars({
     return <EmptyChart label={emptyLabel} />;
   }
   return (
+    <div className="h-full w-full" role="img" aria-label="对比柱状图">
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={data} layout="vertical" margin={{ top: 8, right: 16, left: 8, bottom: 0 }}>
-        <CartesianGrid stroke="color-mix(in oklab, var(--border) 80%, transparent)" horizontal={false} />
+        <CartesianGrid stroke="rgba(255,255,255,0.08)" horizontal={false} />
         <XAxis type="number" hide />
         <YAxis
           type="category"
           dataKey="name"
           width={96}
-          tick={{ fill: "var(--muted)", fontSize: 11 }}
+          tick={{ fill: "#9ba3b5", fontSize: 11 }}
         />
         <Tooltip
           content={
@@ -226,5 +237,6 @@ export function HorizontalBars({
         </Bar>
       </BarChart>
     </ResponsiveContainer>
+    </div>
   );
 }

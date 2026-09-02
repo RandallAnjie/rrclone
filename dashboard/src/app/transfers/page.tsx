@@ -2,41 +2,22 @@
 
 import { Widget } from "@heroui-pro/react/widget";
 import { Chip, ProgressBar, Table, Tabs } from "@heroui/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import { DonutChart, HorizontalBars, SpeedAreaChart } from "@/components/charts";
 import { LiveDot, MotionPage, Rise, Stagger } from "@/components/motion-ui";
 import { PageHeader } from "@/components/page-header";
 import { BlankState, ErrorState, LoadingState, SoftNotice } from "@/components/state-views";
 import { useHosts } from "@/components/host-provider";
+import { useStatsTrend } from "@/components/stats-trend-provider";
 import { formatBytes, formatDuration, formatPercent, formatSpeed, formatTime } from "@/lib/rc/format";
-import {
-  appendTrend,
-  transferSizeBars,
-  transferredOutcomeSlices,
-  type TrendPoint,
-} from "@/lib/rc/insights";
+import { transferSizeBars, transferredOutcomeSlices } from "@/lib/rc/insights";
 import { useRc } from "@/lib/rc/use-rc";
-import type { CoreStats, CoreTransferred } from "@/lib/rc/types";
+import type { CoreTransferred } from "@/lib/rc/types";
 
 export default function TransfersPage() {
   const { host } = useHosts();
-  const stats = useRc<CoreStats>(host, "core/stats", { intervalMs: 2000 });
+  const { stats, trend } = useStatsTrend();
   const done = useRc<CoreTransferred>(host, "core/transferred", { intervalMs: 4000 });
-  const [trend, setTrend] = useState<TrendPoint[]>([]);
-  const lastHostId = useRef(host.id);
-
-  useEffect(() => {
-    const starter = window.setTimeout(() => {
-      setTrend((prev) => {
-        if (lastHostId.current !== host.id) {
-          lastHostId.current = host.id;
-          return appendTrend([], stats.data);
-        }
-        return appendTrend(prev, stats.data);
-      });
-    }, 0);
-    return () => window.clearTimeout(starter);
-  }, [host.id, stats.data]);
 
   const sizeBars = useMemo(() => transferSizeBars(stats.data?.transferring, 10), [stats.data]);
   const outcomes = useMemo(() => transferredOutcomeSlices(done.data?.transferred), [done.data]);

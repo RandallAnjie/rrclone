@@ -26,6 +26,7 @@ export default function TransfersPage() {
   return (
     <MotionPage>
       <PageHeader
+        kicker="流量"
         title="传输"
         description="活动传输来自 core/stats，完成记录来自 core/transferred，并带速度曲线和结果占比。"
         meta={<LiveDot active={Boolean(stats.data)} label="2 秒刷新活动传输" />}
@@ -90,6 +91,7 @@ export default function TransfersPage() {
               {(stats.data.transferring?.length ?? 0) === 0 ? (
                 <BlankState title="没有活动传输" description="新的 copy / sync / mount 写入会显示在这里。" />
               ) : (
+                <div className="table-shell">
                 <Table>
                   <Table.ScrollContainer>
                     <Table.Content aria-label="活动传输">
@@ -124,12 +126,14 @@ export default function TransfersPage() {
                     </Table.Content>
                   </Table.ScrollContainer>
                 </Table>
+                </div>
               )}
             </Tabs.Panel>
             <Tabs.Panel id="done" className="pt-4">
               {(done.data?.transferred?.length ?? 0) === 0 ? (
                 <BlankState title="还没有完成记录" description="rclone 只保留最近大约 100 条完成传输。" />
               ) : (
+                <div className="table-shell">
                 <Table>
                   <Table.ScrollContainer>
                     <Table.Content aria-label="最近完成的传输">
@@ -158,6 +162,7 @@ export default function TransfersPage() {
                     </Table.Content>
                   </Table.ScrollContainer>
                 </Table>
+                </div>
               )}
             </Tabs.Panel>
           </Tabs>

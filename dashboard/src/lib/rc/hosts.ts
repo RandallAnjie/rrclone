@@ -4,12 +4,29 @@ import type { Host } from "./types";
 export const HOSTS_STORAGE_KEY = "rrclone.dashboard.hosts";
 export const SELECTED_HOST_STORAGE_KEY = "rrclone.dashboard.selectedHost";
 
+export type HostDraft = {
+  name: string;
+  url: string;
+  user?: string;
+  pass?: string;
+};
+
 export const LOCAL_HOST: Host = {
   id: "local",
   name: "本机",
   url: "http://127.0.0.1:5572",
   locked: true,
 };
+
+export function applyHostDraft(host: Host, draft: HostDraft): Host {
+  return {
+    ...host,
+    name: draft.name.trim() || host.name,
+    url: normalizeHostUrl(draft.url),
+    user: draft.user?.trim() || undefined,
+    pass: draft.pass || undefined,
+  };
+}
 
 export function defaultHosts(): Host[] {
   return [{ ...LOCAL_HOST }];

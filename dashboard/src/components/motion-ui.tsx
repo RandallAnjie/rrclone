@@ -67,9 +67,9 @@ export function LiveDot({
   label: string;
 }) {
   return (
-    <span className="inline-flex items-center gap-2 text-xs text-muted">
+    <span className="status-pill">
       <span className={`live-dot ${active ? "is-live" : ""}`} aria-hidden />
-      {label}
+      <span className="text-xs text-muted">{label}</span>
     </span>
   );
 }

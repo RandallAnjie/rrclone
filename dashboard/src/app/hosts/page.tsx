@@ -1,8 +1,8 @@
 "use client";
 
-import { Button, Chip, Input, Label, Modal, Table, TextField, useOverlayState } from "@heroui/react";
+import { Button, Chip, Input, Label, Modal, TextField, useOverlayState } from "@heroui/react";
 import { useState } from "react";
-import { MotionPage } from "@/components/motion-ui";
+import { MotionPage, Rise, Stagger } from "@/components/motion-ui";
 import { PageHeader } from "@/components/page-header";
 import { useHosts } from "@/components/host-provider";
 import { normalizeHostUrl } from "@/lib/rc/format";
@@ -70,6 +70,7 @@ export default function HostsPage() {
   return (
     <MotionPage>
       <PageHeader
+        kicker="节点"
         title="主机"
         description="现在默认管理本机 rclone RC。以后要管多台机器，只要再加一个 RC 地址。"
         actions={
@@ -78,57 +79,48 @@ export default function HostsPage() {
           </Button>
         }
       />
-      <Table>
-        <Table.ScrollContainer>
-          <Table.Content aria-label="rclone 主机">
-            <Table.Header>
-              <Table.Column isRowHeader>名称</Table.Column>
-              <Table.Column>RC 地址</Table.Column>
-              <Table.Column>认证</Table.Column>
-              <Table.Column>状态</Table.Column>
-              <Table.Column>操作</Table.Column>
-            </Table.Header>
-            <Table.Body>
-              {hosts.map((item) => (
-                <Table.Row key={item.id} id={item.id}>
-                  <Table.Cell className="font-medium">{item.name}</Table.Cell>
-                  <Table.Cell>{item.url}</Table.Cell>
-                  <Table.Cell>{item.user ? item.user : "无"}</Table.Cell>
-                  <Table.Cell>
-                    {item.id === host.id ? (
-                      <Chip color="success" size="sm">
-                        <Chip.Label>当前</Chip.Label>
-                      </Chip>
-                    ) : (
-                      <Chip size="sm">
-                        <Chip.Label>待命</Chip.Label>
-                      </Chip>
-                    )}
-                  </Table.Cell>
-                  <Table.Cell>
-                    <div className="flex flex-wrap gap-2">
-                      <Button size="sm" variant="secondary" onPress={() => selectHost(item.id)}>
-                        切换
-                      </Button>
-                      <Button size="sm" variant="tertiary" onPress={() => openEdit(item)}>
-                        编辑
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="danger-soft"
-                        isDisabled={Boolean(item.locked)}
-                        onPress={() => removeHost(item.id)}
-                      >
-                        删除
-                      </Button>
+      <Stagger className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {hosts.map((item) => {
+          const current = item.id === host.id;
+          return (
+            <Rise key={item.id}>
+              <article className={`host-card h-full ${current ? "is-current" : ""}`}>
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <span className="brand-mark" aria-hidden>
+                      {(item.name.trim()[0] || "H").toUpperCase()}
+                    </span>
+                    <div>
+                      <h2 className="text-base font-semibold tracking-tight">{item.name}</h2>
+                      <p className="mono-meta mt-0.5">{item.url}</p>
                     </div>
-                  </Table.Cell>
-                </Table.Row>
-              ))}
-            </Table.Body>
-          </Table.Content>
-        </Table.ScrollContainer>
-      </Table>
+                  </div>
+                  <Chip color={current ? "success" : "default"} size="sm">
+                    <Chip.Label>{current ? "当前" : "待命"}</Chip.Label>
+                  </Chip>
+                </div>
+                <p className="mb-4 text-sm text-muted">认证：{item.user ? item.user : "无"}</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant="secondary" onPress={() => selectHost(item.id)}>
+                    切换
+                  </Button>
+                  <Button size="sm" variant="tertiary" onPress={() => openEdit(item)}>
+                    编辑
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="danger-soft"
+                    isDisabled={Boolean(item.locked)}
+                    onPress={() => removeHost(item.id)}
+                  >
+                    删除
+                  </Button>
+                </div>
+              </article>
+            </Rise>
+          );
+        })}
+      </Stagger>
 
       <Modal state={modal}>
         <Modal.Backdrop>

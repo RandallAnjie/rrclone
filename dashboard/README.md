@@ -14,16 +14,16 @@
 
 ## 启动
 
-先在本机打开 rclone RC：
+先在本机打开 rclone / rrclone RC：
 
 ```bash
-./rclone rcd --rc-addr 127.0.0.1:5572 --rc-no-auth
+rrclone rcd --rc-addr 127.0.0.1:5572 --rc-no-auth
 ```
 
 有认证时改成：
 
 ```bash
-./rclone rcd --rc-addr 127.0.0.1:5572 --rc-user gui --rc-pass secret
+rrclone rcd --rc-addr 127.0.0.1:5572 --rc-user gui --rc-pass secret
 ```
 
 然后另开终端：
@@ -34,7 +34,7 @@ npm install
 npm run dev
 ```
 
-浏览器打开 <http://localhost:3000>。默认主机是 `http://127.0.0.1:5572`。如果 RC 开了用户名密码，到「主机」页编辑本机条目。
+浏览器打开 <http://localhost:3000>。默认主机是 `http://127.0.0.1:5572`。RC 不在 5572、或开了用户名密码时，到「主机」页编辑本机条目（地址也可以改）。`/api/rc` 会在服务端把 token / secret 打码，并拒绝云 metadata 地址。
 
 ## 页面
 

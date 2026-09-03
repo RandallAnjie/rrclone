@@ -1,6 +1,23 @@
 import { normalizeHostUrl } from "./format";
 import type { Host } from "./types";
 
+export type HostDraft = {
+  name: string;
+  url: string;
+  user?: string;
+  pass?: string;
+};
+
+export function applyHostDraft(host: Host, draft: HostDraft): Host {
+  return {
+    ...host,
+    name: draft.name.trim() || host.name,
+    url: normalizeHostUrl(draft.url),
+    user: draft.user?.trim() || undefined,
+    pass: draft.pass || undefined,
+  };
+}
+
 export const HOSTS_STORAGE_KEY = "rrclone.dashboard.hosts";
 export const SELECTED_HOST_STORAGE_KEY = "rrclone.dashboard.selectedHost";
 

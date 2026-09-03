@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { normalizeHostUrl } from "@/lib/rc/format";
+import { normalizeHostUrl, redactDeep } from "@/lib/rc/format";
 
 type RcRequest = {
   url?: string;
@@ -68,7 +68,7 @@ export async function POST(request: Request) {
         { status: upstream.status },
       );
     }
-    return NextResponse.json({ data });
+    return NextResponse.json({ data: redactDeep(data) });
   } catch (error) {
     const message =
       error instanceof Error && error.name === "TimeoutError"

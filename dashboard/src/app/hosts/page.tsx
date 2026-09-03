@@ -71,7 +71,7 @@ export default function HostsPage() {
     <MotionPage>
       <PageHeader
         title="主机"
-        description="现在默认管理本机 rclone RC。以后要管多台机器，只要再加一个 RC 地址。"
+        description="默认管本机 rclone RC。本机条目可以改端口和认证，但不能删除。再加地址就能管多台机器。"
         actions={
           <Button variant="primary" onPress={openCreate}>
             添加主机
@@ -147,7 +147,6 @@ export default function HostsPage() {
                 </TextField>
                 <TextField
                   value={draft.url}
-                  isDisabled={Boolean(editing?.locked)}
                   onChange={(value) => setDraft((prev) => ({ ...prev, url: value }))}
                 >
                   <Label>RC 地址</Label>

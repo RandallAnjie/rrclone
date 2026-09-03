@@ -58,6 +58,12 @@ Rclone *("rsync for cloud storage")* 是一个用于在各种云存储之间同�
 
 这些增强能力的详细说明，可以看 Google Drive 文档里的 **“OAuth account rotation”** 章节。
 
+- **rclone 状态看板**
+  - 新增独立的 `dashboard/` Next.js 应用，用来看本机 rclone RC 的传输、远程、任务和挂载
+  - 不改官方命令注册，所以上游 rclone 更新仍然可以直接 merge
+  - 主机页已经按多机器预留，每台机器对应一个 RC 地址
+  - 启动方式见 [dashboard/README.md](dashboard/README.md)
+
 ## Storage providers
 
 - 1Fichier [:page_facing_up:](https://rclone.org/fichier/)

@@ -1,0 +1,52 @@
+@import "tailwindcss";
+@import "@heroui/styles";
+@import "@heroui-pro/react/css";
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.live-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: var(--muted);
+  display: inline-block;
+}
+
+.live-dot.is-live {
+  background: var(--success);
+  box-shadow: 0 0 0 0 color-mix(in oklab, var(--success) 55%, transparent);
+  animation: live-pulse 1.8s ease-out infinite;
+}
+
+@keyframes live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--success) 50%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 0.55rem transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.chart-panel,
+.chart-panel-lg {
+  width: 100%;
+}
+
+.chart-panel {
+  height: 17rem;
+}
+
+.chart-panel-lg {
+  height: 20.5rem;
+}

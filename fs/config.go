@@ -769,10 +769,7 @@ func InitialLogLevel() LogLevel {
 			}
 		}
 	}
-	envValue, found := os.LookupEnv("RRCLONE_LOG_LEVEL")
-	if !found {
-		envValue, found = os.LookupEnv("RCLONE_LOG_LEVEL")
-	}
+	envValue, _, found := LookupEnvWithLegacy("RRCLONE_LOG_LEVEL")
 	if found && envValue == "DEBUG" {
 		logLevel = LogLevelDebug
 	}

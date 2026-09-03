@@ -8,11 +8,13 @@ on:
       - 'install.sh'
       - 'bin/test-install.sh'
       - '.github/workflows/install.yml'
+      - '.github/workflows/release.yml'
   push:
     paths:
       - 'install.sh'
       - 'bin/test-install.sh'
       - '.github/workflows/install.yml'
+      - '.github/workflows/release.yml'
   workflow_dispatch:
 
 permissions:

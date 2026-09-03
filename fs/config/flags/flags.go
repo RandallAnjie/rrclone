@@ -3,7 +3,6 @@
 package flags
 
 import (
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -140,9 +139,9 @@ func installFlag(flags *pflag.FlagSet, name string, groupsString string) {
 		fs.Fatalf(nil, "Couldn't find flag --%q", name)
 	}
 
-	// Read default from environment if possible
-	envKey := fs.OptionToEnv(name)
-	if envValue, envFound := os.LookupEnv(envKey); envFound {
+	// Read default from environment if possible (RRCLONE_* then RCLONE_*)
+	envValue, envKey, envFound := fs.LookupEnvWithLegacy(fs.OptionToEnv(name))
+	if envFound {
 		isStringArray := false
 		opt, isOption := flag.Value.(*fs.Option)
 		if isOption {

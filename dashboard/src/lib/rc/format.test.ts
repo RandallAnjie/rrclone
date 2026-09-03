@@ -3,9 +3,11 @@ import {
   formatBytes,
   formatDuration,
   formatSpeed,
+  isBlockedRcHost,
   isSensitiveKey,
   normalizeHostUrl,
   parseHostUrl,
+  redactDeep,
   redactRecord,
 } from "./format";
 
@@ -43,6 +45,12 @@ describe("host url parsing", () => {
   it("rejects non-http schemes", () => {
     expect(() => parseHostUrl("file:///etc/passwd")).toThrow(/只允许/);
   });
+
+  it("rejects cloud metadata hosts", () => {
+    expect(isBlockedRcHost("169.254.169.254")).toBe(true);
+    expect(isBlockedRcHost("metadata.google.internal")).toBe(true);
+    expect(() => parseHostUrl("http://169.254.169.254/")).toThrow(/metadata/);
+  });
 });
 
 describe("redactRecord", () => {
@@ -60,6 +68,16 @@ describe("redactRecord", () => {
       token: "••••",
       client_secret: "••••",
       scope: "drive",
+    });
+  });
+
+  it("redacts nested tokens before they leave the BFF", () => {
+    expect(
+      redactDeep({
+        drive: { type: "drive", token: "abc", nested: { client_secret: "xyz" } },
+      }),
+    ).toEqual({
+      drive: { type: "drive", token: "••••", nested: { client_secret: "••••" } },
     });
   });
 });

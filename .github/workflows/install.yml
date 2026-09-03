@@ -1,0 +1,29 @@
+---
+# Smoke-test the rrclone one-click installer
+name: install-script
+
+on:
+  pull_request:
+    paths:
+      - 'install.sh'
+      - 'bin/test-install.sh'
+      - '.github/workflows/install.yml'
+  push:
+    paths:
+      - 'install.sh'
+      - 'bin/test-install.sh'
+      - '.github/workflows/install.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run install.sh tests
+        run: bash bin/test-install.sh

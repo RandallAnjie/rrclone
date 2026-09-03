@@ -64,6 +64,32 @@ Rclone *("rsync for cloud storage")* 是一个用于在各种云存储之间同�
   - 主机页已经按多机器预留，每台机器对应一个 RC 地址
   - 启动方式见 [dashboard/README.md](dashboard/README.md)
 
+## 安装（从官方 rclone 一键切到 rrclone）
+
+和官方 `https://rclone.org/install.sh` 一样，Linux / macOS / BSD 可以用一键脚本。默认会安装 `rrclone`，并替换 `rclone` 命令（先把原来的二进制备份成 `rclone.official.bak`）。
+
+```console
+sudo -v ; curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh | sudo bash
+```
+
+已经在用官方 rclone、要把配置一起迁过来时加上 `--migrate`。这会把 `~/.config/rclone/rclone.conf` 复制到 `~/.config/rrclone/rrclone.conf`（目标文件不存在时才复制，不会覆盖已有 rrclone 配置）：
+
+```console
+sudo -v ; curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh | sudo bash -s -- --migrate
+```
+
+只装 `rrclone`、不动现在的 `rclone` 命令：
+
+```console
+sudo -v ; curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh | sudo bash -s -- --no-replace
+```
+
+发布包也可以从 GitHub Releases 下载（`rrclone-<os>-<arch>.zip`）。打 `v*` 标签或在 Actions 里手动跑 `release` workflow 就会生成这些 zip。在还没有 Release 的机器上，脚本会回退到本机 `go build`（需要已安装 Go）。
+
+Windows 没有 bash 一键脚本，请从 [Releases](https://github.com/RandallAnjie/rrclone/releases) 下载 `rrclone-windows-amd64.zip`。
+
+默认配置文件是 `~/.config/rrclone/rrclone.conf`，不是官方的 `~/.config/rclone/rclone.conf`。环境变量优先读 `RRCLONE_*`，没有时回退 `RCLONE_*`。
+
 ## Storage providers
 
 - 1Fichier [:page_facing_up:](https://rclone.org/fichier/)

@@ -1,0 +1,175 @@
+---
+# Build cross-platform zip assets and publish a GitHub Release for install.sh
+# -*- compile-command: "yamllint -f parsable .github/workflows/release.yml" -*-
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to create/update (e.g. v1.75.0-rrclone.1). Empty = latest rolling build'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Names must match install.sh: rrclone-${OS}-${arch}.zip (Darwin = osx)
+          - name: linux-amd64
+            goos: linux
+            goarch: amd64
+          - name: linux-arm64
+            goos: linux
+            goarch: arm64
+          - name: linux-386
+            goos: linux
+            goarch: '386'
+          - name: linux-arm-v7
+            goos: linux
+            goarch: arm
+            goarm: '7'
+          - name: osx-amd64
+            goos: darwin
+            goarch: amd64
+          - name: osx-arm64
+            goos: darwin
+            goarch: arm64
+          - name: freebsd-amd64
+            goos: freebsd
+            goarch: amd64
+          - name: windows-amd64
+            goos: windows
+            goarch: amd64
+            ext: .exe
+
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.x'
+
+      - name: Fetch GUI dist
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: make fetch-gui
+
+      - name: Build archive
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: |
+          set -euo pipefail
+          ext='${{ matrix.ext }}'
+          name="rrclone-${{ matrix.name }}"
+          mkdir -p "dist/${name}"
+
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            ver="${GITHUB_REF_NAME}"
+          elif [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            ver="${{ github.event.inputs.tag }}"
+          else
+            base=$(sed -n 's/.*VersionTag = "\(v[^"]*\)".*/\1/p' fs/versiontag.go | head -n 1)
+            ver="${base}-rrclone.${GITHUB_SHA::7}"
+          fi
+          # Always mark fork builds so install.sh does not treat official rclone as up to date.
+          if [[ "$ver" != *rrclone* ]]; then
+            ver="${ver}-rrclone"
+          fi
+
+          CGO_ENABLED=0 go build -trimpath \
+            -ldflags "-s -w -X github.com/rclone/rclone/fs.Version=${ver}" \
+            -o "dist/${name}/rclone${ext}" .
+          if [[ -f rclone.1 ]]; then
+            cp rclone.1 "dist/${name}/rclone.1"
+          fi
+          printf '%s\n' "$ver" > "dist/${name}/VERSION"
+          (
+            cd dist
+            zip -r "${name}.zip" "${name}"
+          )
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/rrclone-${{ matrix.name }}.zip
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Prepare release files
+        id: prep
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          shopt -s nullglob
+          for zip in release-assets/*/*.zip; do
+            cp "$zip" out/
+          done
+          cp install.sh out/install.sh
+
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            tag="${GITHUB_REF_NAME}"
+          elif [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            tag="${{ github.event.inputs.tag }}"
+          else
+            tag="latest"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+          if [[ "$tag" == latest ]]; then
+            base=$(sed -n 's/.*VersionTag = "\(v[^"]*\)".*/\1/p' fs/versiontag.go | head -n 1)
+            ver="${base}-rrclone.${GITHUB_SHA::7}"
+          elif [[ "$tag" != *rrclone* ]]; then
+            ver="${tag}-rrclone"
+          else
+            ver="$tag"
+          fi
+          # Must match `rclone --version` first line so install.sh can skip re-downloads.
+          printf 'rclone %s\n' "$ver" > out/version.txt
+          (
+            cd out
+            sha256sum ./*.zip install.sh version.txt > SHA256SUMS
+          )
+          ls -la out
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.prep.outputs.tag }}
+          name: rrclone ${{ steps.prep.outputs.tag }}
+          generate_release_notes: true
+          make_latest: true
+          files: |
+            out/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

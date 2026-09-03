@@ -684,8 +684,7 @@ func (s *syncCopyMove) deleteEmptyDirectories(ctx context.Context, f fs.Fs, entr
 	sort.Sort(entries)
 	var errorCount int
 	var okCount int
-	for i := len(entries) - 1; i >= 0; i-- {
-		entry := entries[i]
+	for _, entry := range slices.Backward(entries) {
 		dir, ok := entry.(fs.Directory)
 		if ok {
 			// TryRmdir only deletes empty directories
@@ -961,6 +960,7 @@ func (s *syncCopyMove) run() error {
 		DstIncludeAll:          s.fi.Opt.DeleteExcluded,
 		NoCheckDest:            s.noCheckDest,
 		NoUnicodeNormalization: s.noUnicodeNormalization,
+		NoProcessDstOnly:       s.deleteMode == fs.DeleteModeOff && !s.usingLogger,
 	}
 	s.processError(m.Run(s.ctx))
 

@@ -112,7 +112,8 @@ WebDAV or S3, that work out of the box.)
 <!-- markdownlint-disable line-length no-bare-urls -->
 
 {{< provider_list >}}
-{{< provider name="1Fichier" home="https://1fichier.com/" config="/fichier/" start="true">}}
+{{< provider name="115 Drive" home="https://115.com/" config="/115/" start="true">}}
+{{< provider name="1Fichier" home="https://1fichier.com/" config="/fichier/" >}}
 {{< provider name="Akamai Netstorage" home="https://www.akamai.com/us/en/products/media-delivery/netstorage.jsp" config="/netstorage/" >}}
 {{< provider name="Alibaba Cloud (Aliyun) Object Storage System (OSS)" home="https://www.alibabacloud.com/product/oss/" config="/s3/#alibaba-oss" >}}
 {{< provider name="Amazon S3" home="https://aws.amazon.com/s3/" config="/s3/" >}}

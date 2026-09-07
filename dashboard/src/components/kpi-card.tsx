@@ -17,7 +17,7 @@ export function KpiCard({ label, value, hint, status, chart }: KpiCardProps) {
   const numeric = typeof value === "number" ? value : undefined;
 
   return (
-    <KPI>
+    <KPI className="h-full">
       <KPI.Header>
         <KPI.Title>{label}</KPI.Title>
       </KPI.Header>

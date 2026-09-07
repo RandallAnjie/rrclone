@@ -101,6 +101,7 @@ export default function OverviewPage() {
   return (
     <MotionPage>
       <PageHeader
+        kicker="监控"
         title="概览"
         description={`${host.name} · ${host.url}。速度、占比和任务都会跟着 RC 轮询更新。`}
         meta={
@@ -276,7 +277,7 @@ export default function OverviewPage() {
                 </Widget.Header>
                 <Widget.Content className="space-y-4">
                   {(stats.data?.transferring?.length ?? 0) === 0 ? (
-                    <p className="py-6 text-sm text-muted">当前没有活动传输。</p>
+                    <div className="empty-chart min-h-36">当前没有活动传输</div>
                   ) : (
                     <Table>
                       <Table.ScrollContainer>
@@ -326,7 +327,8 @@ export default function OverviewPage() {
                   <Widget.Title>进程与内存</Widget.Title>
                   <Widget.Description>core/version、memstats、最近完成</Widget.Description>
                 </Widget.Header>
-                <Widget.Content className="space-y-3 text-sm">
+                <Widget.Content className="space-y-1 text-sm">
+                  <dl>
                   <Row label="版本" value={version.data?.version ?? "—"} />
                   <Row label="系统" value={version.data?.osVersion ?? version.data?.os ?? "—"} />
                   <Row label="架构" value={version.data?.osArch ?? version.data?.arch ?? "—"} />
@@ -337,6 +339,7 @@ export default function OverviewPage() {
                   />
                   <Row label="运行时长" value={formatDuration(stats.data?.elapsedTime)} />
                   <Row label="最近完成" value={`${done.data?.transferred?.length ?? 0} 条`} />
+                  </dl>
                   <div className="flex flex-wrap gap-2 pt-1">
                     {version.data?.isBeta ? (
                       <Chip color="warning" size="sm">
@@ -369,9 +372,9 @@ export default function OverviewPage() {
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-start justify-between gap-4">
-      <span className="text-muted">{label}</span>
-      <span className="text-right font-medium break-all">{value}</span>
+    <div className="stat-row">
+      <dt>{label}</dt>
+      <dd>{value}</dd>
     </div>
   );
 }

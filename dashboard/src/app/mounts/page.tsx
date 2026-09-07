@@ -26,6 +26,7 @@ export default function MountsPage() {
   return (
     <MotionPage>
       <PageHeader
+        kicker="本地"
         title="挂载"
         description="当前 FUSE / 盘符挂载来自 mount/listmounts，VFS 缓存来自 vfs/stats。"
         meta={<LiveDot active={Boolean(mounts.data)} label="4 秒刷新挂载" />}
@@ -62,6 +63,7 @@ export default function MountsPage() {
         />
       ) : null}
       {items.length > 0 ? (
+        <div className="table-shell">
         <Table>
           <Table.ScrollContainer>
             <Table.Content aria-label="活动挂载">
@@ -85,6 +87,7 @@ export default function MountsPage() {
             </Table.Content>
           </Table.ScrollContainer>
         </Table>
+        </div>
       ) : null}
     </MotionPage>
   );

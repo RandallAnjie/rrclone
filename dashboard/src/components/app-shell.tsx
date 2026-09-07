@@ -14,6 +14,7 @@ import {
   JobsIcon,
   MountsIcon,
   OverviewIcon,
+  RefreshIcon,
   RemotesIcon,
   TransfersIcon,
 } from "./icons";
@@ -64,9 +65,14 @@ function NavMenu({
 
 function Brand() {
   return (
-    <div className="px-1">
-      <p className="text-xs font-medium tracking-[0.18em] text-muted uppercase">rrclone</p>
-      <p className="text-sm font-semibold">rclone 看板</p>
+    <div className="flex items-center gap-2.5 px-1">
+      <span className="brand-mark" aria-hidden>
+        R
+      </span>
+      <div>
+        <p className="brand-kicker">rrclone</p>
+        <p className="brand-title">控制台</p>
+      </div>
     </div>
   );
 }
@@ -101,7 +107,9 @@ export function AppShell({
           </Sidebar.Group>
         </Sidebar.Content>
         <Sidebar.Footer>
-          <p className="px-1 text-xs text-muted">独立于官方 rclone 源码，后续可直接合并上游。</p>
+          <p className="px-1 text-xs leading-5 text-muted">
+            独立看板，不改官方 rclone 命令树。
+          </p>
         </Sidebar.Footer>
         <Sidebar.Rail />
       </Sidebar>
@@ -157,10 +165,11 @@ export function AppShell({
               </span>
             </Chip.Label>
           </Chip>
-          <span className="hidden text-sm text-muted md:inline">
+          <span className="mono-meta hidden max-w-[22rem] truncate md:inline">
             {version.data?.version ?? host.url}
           </span>
           <Button size="sm" variant="tertiary" onPress={() => void version.refresh()}>
+            <RefreshIcon className="size-3.5" />
             刷新
           </Button>
         </Navbar.Content>
@@ -178,7 +187,7 @@ export function AppShell({
       sidebar={sidebar}
       navbar={navbar}
     >
-      <div className="px-6 py-6" key={pathname}>
+      <div className="app-canvas px-5 py-6 sm:px-7" key={pathname}>
         {children}
       </div>
     </AppLayout>

@@ -63,7 +63,7 @@ func Initialise() {
 	// Override the config file from the environment - we don't
 	// parse the flags any more so this doesn't happen
 	// automatically
-	if envConfig := os.Getenv("RCLONE_CONFIG"); envConfig != "" {
+	if envConfig, _, ok := fs.LookupEnvWithLegacy("RRCLONE_CONFIG"); ok && envConfig != "" {
 		_ = config.SetConfigPath(envConfig)
 	}
 	if *RemoteName == "local" {

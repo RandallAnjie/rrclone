@@ -95,6 +95,45 @@ export function redactRecord(
   return out;
 }
 
+export function redactDeep(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(redactDeep);
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = isSensitiveKey(key) ? "••••" : redactDeep(nested);
+    }
+    return out;
+  }
+  return value;
+}
+
+const BLOCKED_RC_HOSTS = new Set([
+  "metadata.google.internal",
+  "metadata.goog",
+  "metadata.internal",
+  "metadata",
+]);
+
+export function isBlockedRcHost(hostname: string): boolean {
+  const host = hostname.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  if (BLOCKED_RC_HOSTS.has(host)) {
+    return true;
+  }
+  if (host === "0.0.0.0" || host === "::" || host === "[::]") {
+    return true;
+  }
+  if (/^169\.254\./.test(host)) {
+    return true;
+  }
+  // AWS IMDSv2 IPv6
+  if (host === "fd00:ec2::254") {
+    return true;
+  }
+  return false;
+}
+
 export function parseHostUrl(raw: string): URL {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -114,6 +153,9 @@ export function parseHostUrl(raw: string): URL {
   }
   if (!url.hostname) {
     throw new Error("主机地址缺少 hostname");
+  }
+  if (isBlockedRcHost(url.hostname)) {
+    throw new Error("不允许把看板代理到云 metadata 或未指定地址");
   }
   return url;
 }

@@ -66,13 +66,13 @@ Rclone *("rsync for cloud storage")* 是一个用于在各种云存储之间同�
 
 ## 安装（从官方 rclone 一键切到 rrclone）
 
-和官方 `https://rclone.org/install.sh` 一样，Linux / macOS / BSD 可以用一键脚本。默认会安装 `rrclone`，并替换 `rclone` 命令（先把原来的二进制备份成 `rclone.official.bak`）。
+和官方 `https://rclone.org/install.sh` 一样，Linux / macOS / BSD 可以用一键脚本。默认会安装 `rrclone`，替换 `rclone` 命令（原二进制备份成 `rclone.official.bak`），并在还没有 `~/.config/rrclone/rrclone.conf` 时把官方 `rclone.conf` 复制过去（已有 rrclone 配置不会被覆盖）。
 
 ```console
 sudo -v ; curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh | sudo bash
 ```
 
-已经在用官方 rclone、要把配置一起迁过来时加上 `--migrate`。这会把 `~/.config/rclone/rclone.conf` 复制到 `~/.config/rrclone/rrclone.conf`（目标文件不存在时才复制，不会覆盖已有 rrclone 配置）：
+`--migrate` 只是把上面的备份 + 复制配置写明白，行为和默认安装一样：
 
 ```console
 sudo -v ; curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh | sudo bash -s -- --migrate
@@ -88,7 +88,7 @@ sudo -v ; curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/mast
 
 Windows 没有 bash 一键脚本，请从 [Releases](https://github.com/RandallAnjie/rrclone/releases) 下载 `rrclone-windows-amd64.zip`。
 
-默认配置文件是 `~/.config/rrclone/rrclone.conf`，不是官方的 `~/.config/rclone/rclone.conf`。环境变量优先读 `RRCLONE_*`，没有时回退 `RCLONE_*`。
+默认配置文件是 `~/.config/rrclone/rrclone.conf`，不是官方的 `~/.config/rclone/rclone.conf`。环境变量优先读 `RRCLONE_*`，没有时回退 `RCLONE_*`（包括 `--config`、`--verbose`、`--transfers` 这类全局 flag，以及 backend / remote 配置）。发布 zip 里同时带 `rclone` 和 `rrclone` 两个文件名。
 
 ## Storage providers
 

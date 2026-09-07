@@ -256,10 +256,7 @@ func makeConfigPath() string {
 	// variable, since then we skip actually trying to create the default
 	// and report any errors related to it (we can't use pflag for this because
 	// it isn't initialised yet so we search the command line manually).
-	_, configSupplied := os.LookupEnv("RRCLONE_CONFIG")
-	if !configSupplied {
-		_, configSupplied = os.LookupEnv("RCLONE_CONFIG")
-	}
+	_, _, configSupplied := fs.LookupEnvWithLegacy("RRCLONE_CONFIG")
 	if !configSupplied {
 		for _, item := range os.Args {
 			if item == "--config" || strings.HasPrefix(item, "--config=") {
@@ -434,11 +431,10 @@ func FileDeleteKey(section, key string) bool {
 // configmap, which means environment variables before config file.
 func GetValue(remote, key string) string {
 	envKey := fs.ConfigToEnv(remote, key)
-	value, found := os.LookupEnv(envKey)
-	if found {
+	if value, _, found := fs.LookupEnvWithLegacy(envKey); found {
 		return value
 	}
-	value, _ = LoadedData().GetValue(remote, key)
+	value, _ := LoadedData().GetValue(remote, key)
 	return value
 }
 
@@ -461,7 +457,7 @@ type Remote struct {
 	Description string `json:"description"`
 }
 
-var remoteEnvRe = regexp.MustCompile(`^(?:RRCLONE|RCLONE)_CONFIG_(.+?)_TYPE=(.+)$`)
+var remoteEnvRe = regexp.MustCompile(`^(RRCLONE|RCLONE)_CONFIG_(.+?)_TYPE=(.+)$`)
 
 // GetRemotes returns the list of remotes defined in environment and config file.
 //
@@ -469,15 +465,26 @@ var remoteEnvRe = regexp.MustCompile(`^(?:RRCLONE|RCLONE)_CONFIG_(.+?)_TYPE=(.+)
 // configmap, which means environment variables before config file.
 func GetRemotes() []Remote {
 	var remotes []Remote
+	seen := make(map[string]int)
 	for _, item := range os.Environ() {
 		matches := remoteEnvRe.FindStringSubmatch(item)
-		if len(matches) == 3 {
-			remotes = append(remotes, Remote{
-				Name:   strings.ToLower(matches[1]),
-				Type:   strings.ToLower(matches[2]),
-				Source: "environment",
-			})
+		if len(matches) != 4 {
+			continue
 		}
+		prefix, name, typeValue := matches[1], strings.ToLower(matches[2]), strings.ToLower(matches[3])
+		if i, ok := seen[name]; ok {
+			// Prefer RRCLONE_* when both prefixes define the same remote.
+			if prefix == "RRCLONE" {
+				remotes[i].Type = typeValue
+			}
+			continue
+		}
+		seen[name] = len(remotes)
+		remotes = append(remotes, Remote{
+			Name:   name,
+			Type:   typeValue,
+			Source: "environment",
+		})
 	}
 	remoteExists := func(name string) bool {
 		for _, remote := range remotes {

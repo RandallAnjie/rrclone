@@ -129,12 +129,13 @@ pass "install.sh exits 3 when rrclone is already current"
 # Official rclone with the same version string as version.txt must still install.
 # (rrclone --version still starts with "rclone v…", so a naive compare would skip.)
 samever="${work}/samever"
-mkdir -p "${samever}/www/latest/download" "${samever}/bin" "${samever}/home"
+mkdir -p "${samever}/www/latest/download" "${samever}/bin" "${samever}/home/.config/rclone"
 cat > "${samever}/bin/rclone" <<'EOF'
 #!/bin/sh
 echo "rclone v1.75.0"
 EOF
 chmod 755 "${samever}/bin/rclone"
+printf '[drive]\ntype = drive\n' > "${samever}/home/.config/rclone/rclone.conf"
 # Reuse the zip but advertise an official-looking version.txt
 cp "${work}/payload/rrclone-linux-amd64.zip" "${samever}/www/latest/download/"
 printf 'rclone v1.75.0\n' > "${samever}/www/latest/download/version.txt"
@@ -167,6 +168,7 @@ export RRCLONE_BIN_DIR="${samever}/bin"
   fail "install should not treat official rclone as already-current rrclone"
 }
 "${samever}/bin/rrclone" --version | grep -q rrclone || fail "official same-version install did not place rrclone"
+grep -q 'type = drive' "${samever}/home/.config/rrclone/rrclone.conf" || fail "default install did not migrate official rclone.conf"
 pass "install.sh does not skip when only official rclone is present"
 
 # --no-replace leaves a different rclone alone

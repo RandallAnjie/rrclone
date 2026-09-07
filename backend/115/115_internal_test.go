@@ -36,6 +36,17 @@ func TestParseCookies(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for incomplete cookies")
 	}
+
+	uid, cid, seid, kid, err = parseCookies("UID=u1;\nCID=c1; SEID=dead beef\ncafe; KID=k1", "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seid != "deadbeefcafe" {
+		t.Fatalf("expected whitespace stripped from seid, got %q", seid)
+	}
+	if uid != "u1" || cid != "c1" || kid != "k1" {
+		t.Fatalf("got %s %s %s", uid, cid, kid)
+	}
 }
 
 func TestCookieHeader(t *testing.T) {

@@ -199,9 +199,20 @@ var retryErrorCodes = []int{
 	509,
 }
 
+func compactCookieValue(v string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '\t', '\n', '\r':
+			return -1
+		default:
+			return r
+		}
+	}, v)
+}
+
 // parseCookies reads UID/CID/SEID/KID from a cookie header and/or split fields.
 func parseCookies(cookie, uid, cid, seid, kid string) (uidOut, cidOut, seidOut, kidOut string, err error) {
-	uidOut, cidOut, seidOut, kidOut = uid, cid, seid, kid
+	uidOut, cidOut, seidOut, kidOut = compactCookieValue(uid), compactCookieValue(cid), compactCookieValue(seid), compactCookieValue(kid)
 	for _, part := range strings.Split(cookie, ";") {
 		part = strings.TrimSpace(part)
 		if part == "" {
@@ -212,7 +223,7 @@ func parseCookies(cookie, uid, cid, seid, kid string) (uidOut, cidOut, seidOut, 
 			continue
 		}
 		name = strings.TrimSpace(name)
-		val = strings.TrimSpace(val)
+		val = compactCookieValue(val)
 		switch strings.ToUpper(name) {
 		case "UID":
 			if val != "" {
@@ -394,7 +405,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 func (f *Fs) ping(ctx context.Context) error {
 	_, err := f.indexInfo(ctx)
 	if err != nil {
-		return fmt.Errorf("115 login check failed: %w", err)
+		return fmt.Errorf("115 login check failed: %w (re-copy UID/CID/SEID/KID as one line; the same app slot can kick an older session; 115 may also reject non-China IPs)", err)
 	}
 	return nil
 }

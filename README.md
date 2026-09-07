@@ -92,6 +92,7 @@ Windows 没有 bash 一键脚本，请从 [Releases](https://github.com/RandallA
 
 ## Storage providers
 
+- 115 Drive [:page_facing_up:](https://rclone.org/115/)
 - 1Fichier [:page_facing_up:](https://rclone.org/fichier/)
 - Akamai Netstorage [:page_facing_up:](https://rclone.org/netstorage/)
 - Alibaba Cloud (Aliyun) Object Storage System (OSS) [:page_facing_up:](https://rclone.org/s3/#alibaba-oss)

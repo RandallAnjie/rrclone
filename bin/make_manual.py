@@ -30,6 +30,7 @@ docs = [
     "release_signing.md",
 
     # Keep these alphabetical by full name
+    "115.md",
     "fichier.md",
     "alias.md",
     "s3.md",

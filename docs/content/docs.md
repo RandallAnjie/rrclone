@@ -12,6 +12,10 @@ what the [basic syntax](#basic-syntax) looks like, describes the
 various [subcommands](#subcommands), the various [options](#options),
 and more.
 
+This tree is [rrclone](/rrclone/), a fork of rclone. That page covers
+what changed versus upstream, extra backends, and how to replace
+official API URLs (Google Drive needs three).
+
 ## Configure
 
 First, you'll need to configure rclone.  As the object storage systems
@@ -28,6 +32,7 @@ rclone config
 
 See the following for detailed instructions for
 
+- [rrclone fork notes](/rrclone/) - custom API endpoints, 115 Drive, dashboard
 - [115 Drive](/115/)
 - [1Fichier](/fichier/)
 - [Akamai Netstorage](/netstorage/)

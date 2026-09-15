@@ -615,15 +615,24 @@ arguments.
 
 ### Custom API endpoint
 
-rclone talks to Google Drive at `https://www.googleapis.com`. If that
-host is blocked, set `endpoint` to a reverse proxy of it. The proxy
-must also serve resumable uploads at `/upload/drive/v3/`.
+Google Drive uses **three** official hosts. If they are blocked, replace
+all three; changing only `client_id` is not enough.
 
-OAuth uses different hosts. Override those with the existing
-`auth_url` and `token_url` options:
+| What | Official URL | Config / flag |
+| --- | --- | --- |
+| Browser OAuth | `https://accounts.google.com/o/oauth2/auth` | `auth_url` / `--drive-auth-url` |
+| Token issue / refresh (also service-account JWT) | `https://oauth2.googleapis.com/token` | `token_url` / `--drive-token-url` |
+| Drive JSON API and resumable upload | `https://www.googleapis.com` (`/drive/v3/` and `/upload/drive/v3/`) | `endpoint` / `--drive-endpoint` |
 
-- `auth_url`: reverse proxy of `https://accounts.google.com/o/oauth2/auth`
-- `token_url`: reverse proxy of `https://oauth2.googleapis.com/token`
+The `endpoint` proxy must serve both the JSON API and
+`/upload/drive/v3/`. If Google still returns a `Location` on
+`www.googleapis.com`, rclone rewrites it onto `endpoint`.
+
+Interactive login needs all three. Service accounts skip the browser
+host and need `token_url` plus `endpoint`.
+
+A longer fork overview, including Dropbox / Box / OneDrive, is on
+the [rrclone](/rrclone/) page.
 
 Example:
 
@@ -637,8 +646,6 @@ auth_url = https://accounts.example.com/o/oauth2/auth
 token_url = https://oauth2.example.com/token
 endpoint = https://googleapis.example.com
 ```
-
-Service accounts also use `token_url` for JWT refresh.
 
 ### Import/Export of google documents
 

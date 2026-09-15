@@ -1095,6 +1095,34 @@ a remote per user you wish to impersonate.
    `Found drive "root" of type "business"` and then include the URL of the format
    `https://{tenant}-my.sharepoint.com/personal/{user_name_domain_tld}/Documents`
 
+### Custom API endpoint
+
+rclone talks to Microsoft Graph at `https://graph.microsoft.com`
+(or the regional host selected by `region`). If the international Graph
+host is blocked, set `endpoint` to a reverse proxy of it.
+
+For Azure operated by Vnet Group in China, set `region` to `cn`
+instead of using a reverse proxy.
+
+OAuth uses `https://login.microsoftonline.com`. Override that with the
+existing `auth_url` and `token_url` options. `tenant_url` still takes
+precedence when it is set.
+
+Example:
+
+```ini
+[onedrive]
+type = onedrive
+client_id = YOUR_CLIENT_ID
+client_secret = YOUR_CLIENT_SECRET
+token = {"access_token":"..."}
+drive_id = YOUR_DRIVE_ID
+drive_type = personal
+auth_url = https://login.example.com/common/oauth2/v2.0/authorize
+token_url = https://login.example.com/common/oauth2/v2.0/token
+endpoint = https://graph.example.com
+```
+
 ## Limitations
 
 If you don't use rclone for 90 days the refresh token will

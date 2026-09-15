@@ -106,6 +106,35 @@ You can then use team folders like this `remote:/TeamFolder` and
 A leading `/` for a Dropbox personal account will do nothing, but it
 will take an extra HTTP transaction so it should be avoided.
 
+### Custom API endpoint
+
+rclone talks to Dropbox at `https://api.dropboxapi.com` and uploads
+or downloads via `https://content.dropboxapi.com`. If those hosts are
+blocked, set `endpoint` and `content_endpoint` to reverse proxies.
+
+If `endpoint` is an `api.` host and `content_endpoint` is empty, rclone
+uses the matching `content.` host.
+
+OAuth uses different hosts. Override those with the existing
+`auth_url` and `token_url` options:
+
+- `auth_url`: reverse proxy of `https://www.dropbox.com/oauth2/authorize`
+- `token_url`: reverse proxy of `https://api.dropboxapi.com/oauth2/token`
+
+Example:
+
+```ini
+[dropbox]
+type = dropbox
+client_id = YOUR_APP_KEY
+client_secret = YOUR_APP_SECRET
+token = {"access_token":"..."}
+auth_url = https://www.dropbox.example.com/oauth2/authorize
+token_url = https://api.dropbox.example.com/oauth2/token
+endpoint = https://api.dropbox.example.com
+content_endpoint = https://content.dropbox.example.com
+```
+
 ### Modification times and hashes
 
 Dropbox supports modified times, but the only way to set a

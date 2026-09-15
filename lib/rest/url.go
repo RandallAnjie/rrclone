@@ -6,6 +6,20 @@ import (
 	"strings"
 )
 
+// CanonicalRoot returns a normalized HTTP(S) root URL from user configuration.
+// Empty input is returned unchanged. A missing scheme is treated as https.
+// A trailing slash is stripped.
+func CanonicalRoot(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	return strings.TrimRight(raw, "/")
+}
+
 // URLJoin joins a URL and a path returning a new URL
 //
 // path should be URL escaped

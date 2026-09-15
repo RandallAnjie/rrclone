@@ -55,3 +55,19 @@ func TestResumableUploadRetry(t *testing.T) {
 	assert.Equal(t, "fake-id", info.Id)
 	assert.Equal(t, int32(2), attempts.Load(), "expected exactly one failed attempt and one retry")
 }
+
+func TestDriveUploadURL(t *testing.T) {
+	assert.Equal(t, defaultResumableUploadURL, driveUploadURL(""))
+	assert.Equal(t, defaultResumableUploadURL, driveUploadURL("https://www.googleapis.com/drive/v3/"))
+	assert.Equal(t, "https://googleapis.example.com/upload/drive/v3/files", driveUploadURL("https://googleapis.example.com/drive/v3/"))
+	assert.Equal(t, "https://proxy.example.com/google/upload/drive/v3/files", driveUploadURL("https://proxy.example.com/google/drive/v3/"))
+	assert.Equal(t, "https://proxy.example.com/upload/drive/v3/files", driveUploadURL("https://proxy.example.com/"))
+}
+
+func TestRewriteGoogleAPILocation(t *testing.T) {
+	official := "https://www.googleapis.com/upload/drive/v3/files?upload_id=abc"
+	assert.Equal(t, official, rewriteGoogleAPILocation(official, "https://www.googleapis.com/drive/v3/"))
+	assert.Equal(t, "https://googleapis.example.com/upload/drive/v3/files?upload_id=abc", rewriteGoogleAPILocation(official, "https://googleapis.example.com/drive/v3/"))
+	assert.Equal(t, "https://proxy.example.com/google/upload/drive/v3/files?upload_id=abc", rewriteGoogleAPILocation(official, "https://proxy.example.com/google/drive/v3/"))
+	assert.Equal(t, "https://already.example.com/upload/drive/v3/files?upload_id=abc", rewriteGoogleAPILocation("https://already.example.com/upload/drive/v3/files?upload_id=abc", "https://googleapis.example.com/drive/v3/"))
+}

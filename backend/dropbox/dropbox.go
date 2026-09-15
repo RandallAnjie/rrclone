@@ -304,6 +304,40 @@ This makes an extra API call per shared folder mount point.`,
 			Help:     "Minimum time to sleep between API calls.",
 			Advanced: true,
 		}, {
+			Name: "endpoint",
+			Help: `Custom endpoint for the Dropbox API. Leave blank to use the provider default.
+
+This should reverse-proxy https://api.dropboxapi.com. Uploads and
+downloads use content_endpoint (https://content.dropboxapi.com).
+
+If endpoint is an "api." host and content_endpoint is empty, rclone
+uses the matching "content." host. If OAuth is also blocked, set
+auth_url and token_url to the matching proxies of
+https://www.dropbox.com/oauth2/authorize and
+https://api.dropboxapi.com/oauth2/token.`,
+			Advanced: true,
+			Examples: []fs.OptionExample{{
+				Value: "https://api.dropboxapi.com",
+				Help:  "Dropbox API (default)",
+			}, {
+				Value: "https://api.dropbox.example.com",
+				Help:  "Reverse proxy for api.dropboxapi.com",
+			}},
+		}, {
+			Name: "content_endpoint",
+			Help: `Custom endpoint for the Dropbox content API used for uploads and downloads.
+
+Leave blank to derive it from endpoint when that host starts with
+"api.", or to use the provider default.`,
+			Advanced: true,
+			Examples: []fs.OptionExample{{
+				Value: "https://content.dropboxapi.com",
+				Help:  "Dropbox content API (default)",
+			}, {
+				Value: "https://content.dropbox.example.com",
+				Help:  "Reverse proxy for content.dropboxapi.com",
+			}},
+		}, {
 			Name:     config.ConfigEncoding,
 			Help:     config.ConfigEncodingHelp,
 			Advanced: true,
@@ -379,6 +413,8 @@ type Options struct {
 	ExportFormats      fs.CommaSepList      `config:"export_formats"`
 	SkipExports        bool                 `config:"skip_exports"`
 	ShowAllExports     bool                 `config:"show_all_exports"`
+	Endpoint           string               `config:"endpoint"`
+	ContentEndpoint    string               `config:"content_endpoint"`
 }
 
 // Fs represents a remote dropbox server
@@ -558,10 +594,12 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	if err != nil {
 		return nil, err
 	}
+	urlGenerator := dropboxURLGeneratorFromOpt(&f.opt)
 	cfg := dropbox.Config{
 		LogLevel:        dropbox.LogOff, // logging in the SDK: LogOff, LogDebug, LogInfo
 		Client:          oAuthClient,    // maybe???
 		HeaderGenerator: f.headerGenerator,
+		URLGenerator:    urlGenerator,
 	}
 
 	for _, e := range opt.ExportFormats {
@@ -574,7 +612,8 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 
 	// unauthorized config for endpoints that fail with auth
 	ucfg := dropbox.Config{
-		LogLevel: dropbox.LogOff, // logging in the SDK: LogOff, LogDebug, LogInfo
+		LogLevel:     dropbox.LogOff, // logging in the SDK: LogOff, LogDebug, LogInfo
+		URLGenerator: urlGenerator,
 	}
 
 	// NOTE: needs to be created pre-impersonation so we can look up the impersonated user

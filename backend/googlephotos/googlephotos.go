@@ -58,6 +58,17 @@ const (
 	scopeReadWrite              = "https://www.googleapis.com/auth/photoslibrary.edit.appcreateddata"
 )
 
+func photosAPIRoot(endpoint string) string {
+	if endpoint == "" {
+		return rootURL
+	}
+	root := rest.CanonicalRoot(endpoint)
+	if strings.HasSuffix(root, "/v1") {
+		return root
+	}
+	return root + "/v1"
+}
+
 var (
 	// scopes needed for read write access
 	scopesReadWrite = []string{
@@ -243,6 +254,24 @@ rclone use the proxy.
 `, "|", "`"),
 			Advanced: true,
 		}, {
+			Name: "endpoint",
+			Help: `Custom endpoint for the Google Photos API. Leave blank to use the provider default.
+
+This should reverse-proxy https://photoslibrary.googleapis.com, including
+the /v1 path prefix.
+
+If OAuth is also blocked, set auth_url and token_url to the matching
+proxies of https://accounts.google.com/o/oauth2/auth and
+https://oauth2.googleapis.com/token.`,
+			Advanced: true,
+			Examples: []fs.OptionExample{{
+				Value: "https://photoslibrary.googleapis.com/v1",
+				Help:  "Google Photos API (default)",
+			}, {
+				Value: "https://photoslibrary.example.com",
+				Help:  "Reverse proxy for photoslibrary.googleapis.com",
+			}},
+		}, {
 			Name:     config.ConfigEncoding,
 			Help:     config.ConfigEncodingHelp,
 			Advanced: true,
@@ -264,6 +293,7 @@ type Options struct {
 	BatchSize       int                  `config:"batch_size"`
 	BatchTimeout    fs.Duration          `config:"batch_timeout"`
 	Proxy           string               `config:"proxy"`
+	Endpoint        string               `config:"endpoint"`
 }
 
 // Fs represents a remote storage server
@@ -403,7 +433,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		root:      root,
 		opt:       *opt,
 		unAuth:    rest.NewClient(baseClient),
-		srv:       rest.NewClient(oAuthClient).SetRoot(rootURL),
+		srv:       rest.NewClient(oAuthClient).SetRoot(photosAPIRoot(opt.Endpoint)),
 		ts:        ts,
 		pacer:     fs.NewPacer(ctx, pacer.NewGoogleDrive(pacer.MinSleep(minSleep))),
 		startTime: time.Now(),

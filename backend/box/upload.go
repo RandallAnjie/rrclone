@@ -28,7 +28,7 @@ func (o *Object) createUploadSession(ctx context.Context, leaf, directoryID stri
 	opts := rest.Opts{
 		Method:  "POST",
 		Path:    "/files/upload_sessions",
-		RootURL: uploadURL,
+		RootURL: o.fs.uploadAPI(),
 	}
 	request := api.UploadSessionRequest{
 		FileSize: size,
@@ -67,7 +67,7 @@ func (o *Object) uploadPart(ctx context.Context, SessionID string, offset, total
 	opts := rest.Opts{
 		Method:        "PUT",
 		Path:          "/files/upload_sessions/" + SessionID,
-		RootURL:       uploadURL,
+		RootURL:       o.fs.uploadAPI(),
 		ContentType:   "application/octet-stream",
 		ContentLength: &chunkSize,
 		ContentRange:  fmt.Sprintf("bytes %d-%d/%d", offset, offset+chunkSize-1, totalSize),
@@ -97,7 +97,7 @@ func (o *Object) commitUpload(ctx context.Context, SessionID string, parts []api
 	opts := rest.Opts{
 		Method:  "POST",
 		Path:    "/files/upload_sessions/" + SessionID + "/commit",
-		RootURL: uploadURL,
+		RootURL: o.fs.uploadAPI(),
 		ExtraHeaders: map[string]string{
 			"Digest": sha1Digest(sha1sum),
 		},
@@ -171,7 +171,7 @@ func (o *Object) abortUpload(ctx context.Context, SessionID string) (err error) 
 	opts := rest.Opts{
 		Method:     "DELETE",
 		Path:       "/files/upload_sessions/" + SessionID,
-		RootURL:    uploadURL,
+		RootURL:    o.fs.uploadAPI(),
 		NoResponse: true,
 	}
 	var resp *http.Response

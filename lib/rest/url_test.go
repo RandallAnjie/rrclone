@@ -9,6 +9,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCanonicalRoot(t *testing.T) {
+	for _, test := range []struct {
+		in, want string
+	}{
+		{"", ""},
+		{"  ", ""},
+		{"https://example.com", "https://example.com"},
+		{"https://example.com/", "https://example.com"},
+		{"https://example.com/api/", "https://example.com/api"},
+		{"http://localhost:8080/", "http://localhost:8080"},
+		{"example.com", "https://example.com"},
+		{"example.com:4443/gcs/api", "https://example.com:4443/gcs/api"},
+	} {
+		assert.Equal(t, test.want, CanonicalRoot(test.in), test.in)
+	}
+}
+
 func TestURLJoin(t *testing.T) {
 	for i, test := range []struct {
 		base   string

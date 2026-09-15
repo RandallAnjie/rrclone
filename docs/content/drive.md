@@ -613,6 +613,33 @@ Drive, the size of all files in the Trash and the space used by other
 Google services such as Gmail. This command does not take any path
 arguments.
 
+### Custom API endpoint
+
+rclone talks to Google Drive at `https://www.googleapis.com`. If that
+host is blocked, set `endpoint` to a reverse proxy of it. The proxy
+must also serve resumable uploads at `/upload/drive/v3/`.
+
+OAuth uses different hosts. Override those with the existing
+`auth_url` and `token_url` options:
+
+- `auth_url`: reverse proxy of `https://accounts.google.com/o/oauth2/auth`
+- `token_url`: reverse proxy of `https://oauth2.googleapis.com/token`
+
+Example:
+
+```ini
+[gdrive]
+type = drive
+client_id = YOUR_CLIENT_ID
+client_secret = YOUR_CLIENT_SECRET
+token = {"access_token":"..."}
+auth_url = https://accounts.example.com/o/oauth2/auth
+token_url = https://oauth2.example.com/token
+endpoint = https://googleapis.example.com
+```
+
+Service accounts also use `token_url` for JWT refresh.
+
 ### Import/Export of google documents
 
 Google documents can be exported from and uploaded to Google Drive.

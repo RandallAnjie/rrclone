@@ -101,7 +101,7 @@ token_url = https://oauth2.example.com/token
 endpoint = https://googleapis.example.com
 ```
 
-`endpoint` 对应的反代必须同时提供：
+`endpoint` 填反代的 origin（`https://googleapis.example.com`），不必把 `/drive/v3` 写进配置。rclone 会在这台主机上请求：
 
 - `GET/POST /drive/v3/...` 列表、元数据、下载
 - `POST /upload/drive/v3/files` 可恢复上传

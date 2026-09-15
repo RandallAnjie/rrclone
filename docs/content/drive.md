@@ -624,9 +624,10 @@ all three; changing only `client_id` is not enough.
 | Token issue / refresh (also service-account JWT) | `https://oauth2.googleapis.com/token` | `token_url` / `--drive-token-url` |
 | Drive JSON API and resumable upload | `https://www.googleapis.com` (`/drive/v3/` and `/upload/drive/v3/`) | `endpoint` / `--drive-endpoint` |
 
-The `endpoint` proxy must serve both the JSON API and
-`/upload/drive/v3/`. If Google still returns a `Location` on
-`www.googleapis.com`, rclone rewrites it onto `endpoint`.
+Set `endpoint` to the origin (`https://googleapis.example.com`). rclone
+requests `/drive/v3/` and `/upload/drive/v3/` on that host. If Google
+still returns a `Location` on `www.googleapis.com`, rclone rewrites it
+onto `endpoint`.
 
 Interactive login needs all three. Service accounts skip the browser
 host and need `token_url` plus `endpoint`.

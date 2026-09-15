@@ -812,8 +812,9 @@ See: https://developers.google.com/workspace/drive/api/guides/limited-expansive-
 			Name: "endpoint",
 			Help: `Custom endpoint for the Google Drive API. Leave blank to use the provider default.
 
-This should reverse-proxy https://www.googleapis.com, including the Drive
-JSON API (/drive/v3/) and resumable uploads (/upload/drive/v3/).
+Set the origin that reverse-proxies https://www.googleapis.com (scheme and
+host). rclone requests /drive/v3/ and resumable uploads /upload/drive/v3/
+on that origin.
 
 If OAuth or service-account token refresh is also blocked, set token_url
 (and auth_url for interactive login) to the matching proxies of
@@ -1641,9 +1642,13 @@ func getServiceAccountClient(ctx context.Context, opt *Options, credentialsData 
 }
 
 func (f *Fs) driveClientOptions() []option.ClientOption {
+	return f.driveClientOptionsFor("v3")
+}
+
+func (f *Fs) driveClientOptionsFor(apiVersion string) []option.ClientOption {
 	opts := []option.ClientOption{option.WithHTTPClient(f.client)}
-	if f.opt.Endpoint != "" {
-		opts = append(opts, option.WithEndpoint(f.opt.Endpoint))
+	if ep := driveAPIEndpoint(f.opt.Endpoint, apiVersion); ep != "" {
+		opts = append(opts, option.WithEndpoint(ep))
 	}
 	return opts
 }
@@ -1996,7 +2001,7 @@ func (f *Fs) changeOAuthAccountFile(ctx context.Context, file string) (err error
 		return fmt.Errorf("couldn't create Drive client: %w", err)
 	}
 	if f.opt.V2DownloadMinSize >= 0 {
-		f.v2Svc, err = drive_v2.NewService(context.Background(), f.driveClientOptions()...)
+		f.v2Svc, err = drive_v2.NewService(context.Background(), f.driveClientOptionsFor("v2")...)
 		if err != nil {
 			return fmt.Errorf("couldn't create Drive v2 client: %w", err)
 		}
@@ -2131,7 +2136,7 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 	}
 
 	if f.opt.V2DownloadMinSize >= 0 {
-		f.v2Svc, err = drive_v2.NewService(context.Background(), f.driveClientOptions()...)
+		f.v2Svc, err = drive_v2.NewService(context.Background(), f.driveClientOptionsFor("v2")...)
 		if err != nil {
 			return nil, fmt.Errorf("couldn't create Drive v2 client: %w", err)
 		}
@@ -4132,7 +4137,7 @@ func (f *Fs) changeServiceAccountFile(ctx context.Context, file string) (err err
 		return fmt.Errorf("couldn't create Drive client: %w", err)
 	}
 	if f.opt.V2DownloadMinSize >= 0 {
-		f.v2Svc, err = drive_v2.NewService(context.Background(), f.driveClientOptions()...)
+		f.v2Svc, err = drive_v2.NewService(context.Background(), f.driveClientOptionsFor("v2")...)
 		if err != nil {
 			return fmt.Errorf("couldn't create Drive v2 client: %w", err)
 		}

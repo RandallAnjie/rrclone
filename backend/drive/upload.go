@@ -38,6 +38,38 @@ func isOfficialGoogleAPIHost(host string) bool {
 	return host == "www.googleapis.com" || host == "www.mtls.googleapis.com"
 }
 
+// driveAPIEndpoint returns an endpoint for option.WithEndpoint.
+//
+// The Google API client uses a full URL as BasePath verbatim, so an origin-only
+// value such as https://proxy.example.com would request /about instead of
+// /drive/v3/about. When the configured path does not already include /drive/v3
+// or /drive/v2, /drive/{apiVersion}/ is appended.
+func driveAPIEndpoint(endpoint, apiVersion string) string {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return ""
+	}
+	if apiVersion == "" {
+		apiVersion = "v3"
+	}
+	raw := endpoint
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return endpoint
+	}
+	path := strings.TrimSuffix(u.Path, "/")
+	if !strings.HasSuffix(path, "/drive/v3") && !strings.HasSuffix(path, "/drive/v2") {
+		path += "/drive/" + apiVersion
+	}
+	u.Path = path + "/"
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
+}
+
 func driveAPIPathPrefix(basePath string) string {
 	prefix := strings.TrimSuffix(basePath, "/")
 	prefix = strings.TrimSuffix(prefix, "/drive/v3")

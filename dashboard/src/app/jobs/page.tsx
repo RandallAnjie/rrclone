@@ -113,6 +113,7 @@ export default function JobsPage() {
   return (
     <MotionPage>
       <PageHeader
+        kicker="调度"
         title="任务"
         description={`异步 RC 任务来自 job/list 和 job/status。当前展示运行中 + 最近 ${MAX_FINISHED} 条完成记录${
           totalKnown > ids.length ? `（共 ${totalKnown}）` : ""
@@ -156,6 +157,7 @@ export default function JobsPage() {
               </Widget>
             </Rise>
           </Stagger>
+          <div className="table-shell">
           <Table>
             <Table.ScrollContainer>
               <Table.Content aria-label="rclone 任务">
@@ -207,6 +209,7 @@ export default function JobsPage() {
               </Table.Content>
             </Table.ScrollContainer>
           </Table>
+          </div>
         </div>
       ) : null}
     </MotionPage>

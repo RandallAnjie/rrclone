@@ -19,22 +19,18 @@ import {
 import type { ChartSlice, TrendPoint } from "@/lib/rc/insights";
 
 export const CHART_COLORS = [
-  "#8b9dff",
-  "#3dd68c",
-  "#f5a524",
-  "#f31260",
   "#7dd3fc",
-  "#c084fc",
+  "#67e8a8",
   "#f5c451",
+  "#fb7185",
+  "#a5b4fc",
+  "#c4b5fd",
+  "#5eead4",
 ];
 
 function EmptyChart({ label }: { label: string }) {
   return (
-    <div
-      role="img"
-      aria-label={label}
-      className="flex h-full min-h-52 items-center justify-center text-sm text-muted"
-    >
+    <div role="img" aria-label={label} className="empty-chart">
       {label}
     </div>
   );
@@ -56,8 +52,8 @@ export function SpeedAreaChart({
       <AreaChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
         <defs>
           <linearGradient id="speedFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#8b9dff" stopOpacity={0.35} />
-            <stop offset="100%" stopColor="#8b9dff" stopOpacity={0.02} />
+            <stop offset="0%" stopColor="#7dd3fc" stopOpacity={0.38} />
+            <stop offset="100%" stopColor="#7dd3fc" stopOpacity={0.02} />
           </linearGradient>
         </defs>
         <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
@@ -89,7 +85,7 @@ export function SpeedAreaChart({
           type="monotone"
           dataKey="speed"
           name="速度"
-          stroke="#8b9dff"
+          stroke="#7dd3fc"
           strokeWidth={2}
           fill="url(#speedFill)"
           isAnimationActive={data.length < 8}
@@ -99,7 +95,7 @@ export function SpeedAreaChart({
           type="monotone"
           dataKey="transferring"
           name="进行中"
-          stroke="#3dd68c"
+          stroke="#67e8a8"
           strokeWidth={1.5}
           fill="transparent"
           isAnimationActive={data.length < 8}

@@ -82,3 +82,12 @@ export function HostsIcon(props: IconProps) {
     </Icon>
   );
 }
+
+export function RefreshIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M20 12a8 8 0 1 1-2.2-5.5" />
+      <path d="M20 4v5h-5" />
+    </Icon>
+  );
+}

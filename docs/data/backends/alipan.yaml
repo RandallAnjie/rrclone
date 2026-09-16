@@ -1,0 +1,23 @@
+backend: "alipan"
+name: Aliyun Drive
+tier: Tier 2
+maintainers: External
+features_score: 4
+integration_tests: Unknown
+data_integrity: Hash
+performance: High
+adoption: Some use
+docs: Full
+security: High
+virtual: false
+remote: 'TestAliPan:'
+features:
+- About
+- CanHaveEmptyDirectories
+- DirCacheFlush
+- DirMove
+- Move
+- Purge
+hashes:
+- sha1
+precision: 1s

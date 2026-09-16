@@ -1,0 +1,25 @@
+backend: "123"
+name: 123 Cloud
+tier: Tier 2
+maintainers: External
+features_score: 4
+integration_tests: Unknown
+data_integrity: Hash
+performance: High
+adoption: Some use
+docs: Full
+security: High
+virtual: false
+remote: 'Test123:'
+features:
+- About
+- CanHaveEmptyDirectories
+- Copy
+- DirCacheFlush
+- DirMove
+- Move
+- Purge
+hashes:
+- md5
+- sha1
+precision: 1s

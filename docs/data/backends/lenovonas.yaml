@@ -1,0 +1,20 @@
+backend: "lenovonas"
+name: Lenovo NAS Share
+tier: Tier 2
+maintainers: External
+features_score: 3
+integration_tests: Unknown
+data_integrity: Unknown
+performance: Medium
+adoption: Some use
+docs: Full
+security: High
+virtual: false
+remote: 'TestLenovonas:'
+features:
+- CanHaveEmptyDirectories
+- DirCacheFlush
+- Move
+- Purge
+hashes: []
+precision: 1s

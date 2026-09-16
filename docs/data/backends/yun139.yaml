@@ -1,0 +1,19 @@
+backend: "yun139"
+name: China Mobile Yun 139
+tier: Tier 2
+maintainers: External
+features_score: 3
+integration_tests: Unknown
+data_integrity: Hash
+performance: Medium
+adoption: Some use
+docs: Full
+security: High
+virtual: false
+remote: 'TestYun139:'
+features:
+- CanHaveEmptyDirectories
+- DirCacheFlush
+hashes:
+- md5
+precision: 1s

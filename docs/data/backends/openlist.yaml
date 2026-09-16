@@ -1,0 +1,21 @@
+backend: "openlist"
+name: AList / OpenList
+tier: Tier 2
+maintainers: External
+features_score: 4
+integration_tests: Unknown
+data_integrity: Hash
+performance: High
+adoption: Some use
+docs: Full
+security: High
+virtual: false
+remote: 'TestOpenList:'
+features:
+- CanHaveEmptyDirectories
+- DirCacheFlush
+- Move
+- Purge
+hashes:
+- md5
+precision: 1s

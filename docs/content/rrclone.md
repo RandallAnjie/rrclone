@@ -43,6 +43,7 @@ rrclone 是 [rclone](https://rclone.org) 的增强分支。命令、后端和官
 
 - **自定义 API**：官方域名不通时，把请求打到你自己的反代，见下面 [URL 怎么换](#自定义-apiurl-怎么换)
 - **115 Drive**：浏览器 cookie 登录，列表 / 上传 / 下载 / 秒传，见 [115](/115/)
+- **国内网盘**：123、阿里云盘、百度、夸克、UC、天翼、和彩云、迅雷、蓝奏、微云、沃盘等，见下面 [后端](#后端)
 - **Drive 多账号**：多个 OAuth token 文件轮换，适合大量上传和挂载，见 [Drive OAuth account rotation](/drive/#oauth-account-rotation)
 - **看板**：传输、远程、任务、挂载、多主机 RC 地址
 
@@ -55,6 +56,51 @@ rrclone 是 [rclone](https://rclone.org) 的增强分支。命令、后端和官
 | 后端 | 说明 |
 | --- | --- |
 | [115 Drive](/115/) | 115 网盘，cookie 认证，web API |
+| [115 Share](/115share/) | 115 分享链接 |
+| [123 Cloud](/123/) | 123 云盘 Open API |
+| [123 Share](/123share/) | 123 分享链接 |
+| [AList / OpenList](/openlist/) | 自己的 AList / OpenList v3 服务器 |
+| [OpenList Share](/openlistshare/) | OpenList 公开分享 |
+| [Aliyun Drive](/alipan/) | 阿里云盘开放平台 |
+| [Aliyun Drive Share](/alishare/) | 阿里云盘分享 |
+| [Aliyun Docs](/alidoc/) | 钉钉阿里文档 |
+| [Baidu Netdisk](/baidu/) | 百度网盘开放平台 |
+| [Baidu Photos](/baiduphoto/) | 百度一刻相册 |
+| [Bunny Storage](/bunny/) | Bunny.net 存储 |
+| [Chaoxing](/chaoxing/) | 超星网盘 |
+| [China Telecom Cloud 189](/cloud189/) | 天翼云盘 |
+| [China Mobile Yun 139](/yun139/) | 和彩云 |
+| [Cloudreve](/cloudreve/) / [V4](/cloudrevev4/) | 自建 Cloudreve |
+| [CNB Releases](/cnbreleases/) | CNB 发行版资产 |
+| [Degoo](/degoo/) | Degoo |
+| [Doubao](/doubao/) | 豆包文件 |
+| [FebBox](/febbox/) | FebBox |
+| [GitHub](/github/) / [GitHub Releases](/githubreleases/) | 仓库目录和 Release |
+| [GuangYaPan](/guangyapan/) | 光崖盘 |
+| [HalalCloud](/halalcloud/) | HalalCloud |
+| [iLanZou](/ilanzou/) | 蓝奏优享 / 飞机盘 |
+| [IPFS](/ipfs/) | IPFS HTTP API |
+| [KodBox](/kodbox/) | 可道云 |
+| [Lanzou](/lanzou/) | 蓝奏云 |
+| [Lenovo NAS Share](/lenovonas/) | 联想 NAS 分享 |
+| [MediaFire](/mediafire/) | MediaFire |
+| [MediaTrack](/mediatrack/) | MediaTrack |
+| [Misskey](/misskey/) | Misskey 网盘 |
+| [MoPan](/mopan/) | 移动云盘魔盘 |
+| [Netease Music](/netease/) | 网易云音乐云盘 |
+| [OneDrive Share](/onedriveshare/) | OneDrive 分享链接 |
+| [PikPak Share](/pikpakshare/) | PikPak 分享 |
+| [Quark Drive](/quark/) | 夸克网盘 |
+| [TeraBox](/terabox/) | TeraBox |
+| [Teldrive](/teldrive/) | Teldrive |
+| [Teambition](/teambition/) | Teambition |
+| [Thunder](/thunder/) / [ThunderX](/thunderx/) | 迅雷网盘 |
+| [UC Drive](/uc/) | UC 网盘 |
+| [Upyun USS](/upyun/) | 又拍云 USS |
+| [WeiYun](/weiyun/) | 腾讯微云 |
+| [WoPan](/wopan/) | 联通沃云盘 |
+| [WPS Drive](/wps/) | WPS 云文档 |
+| [Cloudflare ImgBed](/imgbed/) | Cloudflare 图床 |
 
 下面这些后端可以把**官方 API 主机**换成反代（空着就是官方地址）：
 

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # rrclone one-click installer (modeled on https://rclone.org/install.sh)
 #
-# Install (replace official rclone, keep a .official.bak copy of the binary):
+# Install (replace official rclone, keep a .official.bak copy of the binary,
+# and copy rclone.conf → rrclone.conf when the dest file is missing):
 #   sudo -v ; curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh | sudo bash
 #
-# Migrate from official rclone (backup binary + copy rclone.conf → rrclone.conf):
+# Same as default, but make the binary backup + config copy explicit:
 #   sudo -v ; curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh | sudo bash -s -- --migrate
 #
 # Install as rrclone only (do not replace /usr/bin/rclone):
@@ -43,7 +44,7 @@ Usage:
   sudo -v ; curl -fsSL ${RAW_BASE}/install.sh | sudo bash -s -- [options]
 
 Options:
-  --migrate      Backup official rclone binary and copy rclone.conf → rrclone.conf
+  --migrate      Backup official rclone binary (config is copied whenever dest is missing)
   --no-replace   Install rrclone only; leave the existing rclone command alone
   --force        Reinstall even if the same rrclone version is already present
   -h, --help     Show this help
@@ -413,14 +414,15 @@ rrclone_install_main() {
     exit 1
   fi
 
-  if [ "$migrate" -eq 1 ]; then
-    backup_official_rclone
-    unset XDG_CONFIG_HOME
-    migrate_config
-    export XDG_CONFIG_HOME="${tmp_dir}/config"
-  elif [ "$replace" -eq 1 ] && command -v rclone >/dev/null 2>&1; then
+  if [ "$migrate" -eq 1 ] || { [ "$replace" -eq 1 ] && command -v rclone >/dev/null 2>&1; }; then
     backup_official_rclone || true
   fi
+
+  # Always copy official rclone.conf → rrclone.conf when the dest is absent.
+  # Replacing the rclone command otherwise leaves users with an empty config.
+  unset XDG_CONFIG_HOME
+  migrate_config
+  export XDG_CONFIG_HOME="${tmp_dir}/config"
 
   install_binary rclone "${binTgtDir}/rrclone"
   log "Installed ${binTgtDir}/rrclone"
@@ -435,7 +437,8 @@ rrclone_install_main() {
   if [ -f rclone.1 ]; then
     if mkdir -p "$man1TgtDir" 2>/dev/null && [ -w "$man1TgtDir" ]; then
       cp rclone.1 "${man1TgtDir}/rclone.1"
-      chmod a=r "${man1TgtDir}/rclone.1" 2>/dev/null || true
+      cp rclone.1 "${man1TgtDir}/rrclone.1"
+      chmod a=r "${man1TgtDir}/rclone.1" "${man1TgtDir}/rrclone.1" 2>/dev/null || true
       if command -v mandb >/dev/null 2>&1; then
         mandb >/dev/null 2>&1 || true
       elif command -v makewhatis >/dev/null 2>&1; then
@@ -454,13 +457,9 @@ rrclone_install_main() {
     printf ' (and rclone)'
   fi
   printf '.\n'
-  if [ "$migrate" -eq 1 ]; then
-    printf 'Config migration attempted; default config path is ~/.config/rrclone/rrclone.conf\n'
-  else
-    printf 'Now run "rrclone config" (or "rclone config" if replaced).\n'
-    printf 'To migrate an existing official rclone install and config:\n'
-    printf '  curl -fsSL %s/install.sh | sudo bash -s -- --migrate\n' "$RAW_BASE"
-  fi
+  printf 'Default config path is ~/.config/rrclone/rrclone.conf\n'
+  printf 'Official rclone.conf is copied there only if that file does not already exist.\n'
+  printf 'Now run "rrclone config" (or "rclone config" if replaced).\n'
   printf 'Docs: https://github.com/%s\n\n' "$REPO"
   exit 0
 }

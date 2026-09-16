@@ -10,15 +10,20 @@ import (
 	"github.com/rclone/rclone/fs/config/configmap"
 )
 
-func lookupEnvWithLegacy(envKey string) (value string, ok bool) {
-	value, ok = os.LookupEnv(envKey)
-	if ok {
-		return value, true
+// LookupEnvWithLegacy reads envKey and, if it is missing and starts
+// with RRCLONE_, falls back to the same name with an RCLONE_ prefix.
+// usedKey is the variable that actually supplied the value.
+func LookupEnvWithLegacy(envKey string) (value, usedKey string, ok bool) {
+	if value, ok = os.LookupEnv(envKey); ok {
+		return value, envKey, true
 	}
 	if strings.HasPrefix(envKey, "RRCLONE_") {
-		return os.LookupEnv("RCLONE_" + strings.TrimPrefix(envKey, "RRCLONE_"))
+		legacy := "RCLONE_" + strings.TrimPrefix(envKey, "RRCLONE_")
+		if value, ok = os.LookupEnv(legacy); ok {
+			return value, legacy, true
+		}
 	}
-	return "", false
+	return "", "", false
 }
 
 // A configmap.Getter to read from the environment RCLONE_CONFIG_backend_option_name
@@ -30,10 +35,11 @@ type configEnvVars struct {
 // Get a config item from the environment variables if possible
 func (c configEnvVars) Get(key string) (value string, ok bool) {
 	envKey := ConfigToEnv(c.configName, key)
-	value, ok = lookupEnvWithLegacy(envKey)
+	var usedKey string
+	value, usedKey, ok = LookupEnvWithLegacy(envKey)
 	if ok {
 		opt := c.options.Get(key)
-		Debugf(nil, "Setting %s=%s for %q from environment variable %s", key, RedactOptionValue(GetConfig(context.Background()), opt, value), c.configName, envKey)
+		Debugf(nil, "Setting %s=%s for %q from environment variable %s", key, RedactOptionValue(GetConfig(context.Background()), opt, value), c.configName, usedKey)
 	}
 	return value, ok
 }
@@ -56,15 +62,16 @@ func (oev optionEnvVars) Get(key string) (value string, ok bool) {
 	} else {
 		envKey = OptionToEnv(oev.prefix + "-" + key)
 	}
-	value, ok = lookupEnvWithLegacy(envKey)
+	var usedKey string
+	value, usedKey, ok = LookupEnvWithLegacy(envKey)
 	if ok {
-		Debugf(nil, "Setting %s %s=%s from environment variable %s", oev.prefix, key, RedactOptionValue(GetConfig(context.Background()), opt, value), envKey)
+		Debugf(nil, "Setting %s %s=%s from environment variable %s", oev.prefix, key, RedactOptionValue(GetConfig(context.Background()), opt, value), usedKey)
 	} else if opt.NoPrefix {
 		// For options with NoPrefix set, check without prefix too
 		envKey := OptionToEnv(key)
-		value, ok = lookupEnvWithLegacy(envKey)
+		value, usedKey, ok = LookupEnvWithLegacy(envKey)
 		if ok {
-			Debugf(nil, "Setting %s=%s for %s from environment variable %s", key, RedactOptionValue(GetConfig(context.Background()), opt, value), oev.prefix, envKey)
+			Debugf(nil, "Setting %s=%s for %s from environment variable %s", key, RedactOptionValue(GetConfig(context.Background()), opt, value), oev.prefix, usedKey)
 		}
 	}
 	return value, ok

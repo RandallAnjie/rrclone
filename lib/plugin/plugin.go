@@ -11,7 +11,10 @@ import (
 )
 
 func init() {
-	dir := os.Getenv("RCLONE_PLUGIN_PATH")
+	dir := os.Getenv("RRCLONE_PLUGIN_PATH")
+	if dir == "" {
+		dir = os.Getenv("RCLONE_PLUGIN_PATH")
+	}
 	if dir == "" {
 		return
 	}

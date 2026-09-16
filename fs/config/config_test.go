@@ -69,3 +69,39 @@ func TestCreateRemoteEphemeralConfigKeysReachBackend(t *testing.T) {
 	assert.Equal(t, "", config.GetValue("eph", "config_template_file"))
 	assert.Equal(t, "", config.GetValue("eph", "config_template"))
 }
+
+func TestGetValueFallsBackToRcloneEnv(t *testing.T) {
+	t.Setenv("RCLONE_CONFIG_MYREMOTE_TOKEN", "legacy-token")
+	assert.Equal(t, "legacy-token", config.GetValue("myremote", "token"))
+
+	t.Setenv("RRCLONE_CONFIG_MYREMOTE_TOKEN", "new-token")
+	assert.Equal(t, "new-token", config.GetValue("myremote", "token"))
+}
+
+func TestGetRemotesDedupsLegacyEnv(t *testing.T) {
+	t.Setenv("RRCLONE_CONFIG_DRIVE_TYPE", "drive")
+	t.Setenv("RCLONE_CONFIG_DRIVE_TYPE", "local")
+	t.Setenv("RCLONE_CONFIG_ONLYOLD_TYPE", "local")
+	t.Setenv("RRCLONE_CONFIG_ONLYNEW_TYPE", "alias")
+
+	var envNames []string
+	var envTypes = map[string]string{}
+	for _, remote := range config.GetRemotes() {
+		if remote.Source != "environment" {
+			continue
+		}
+		envNames = append(envNames, remote.Name)
+		envTypes[remote.Name] = remote.Type
+	}
+
+	driveCount := 0
+	for _, name := range envNames {
+		if name == "drive" {
+			driveCount++
+		}
+	}
+	assert.Equal(t, 1, driveCount)
+	assert.Equal(t, "drive", envTypes["drive"])
+	assert.Equal(t, "local", envTypes["onlyold"])
+	assert.Equal(t, "alias", envTypes["onlynew"])
+}

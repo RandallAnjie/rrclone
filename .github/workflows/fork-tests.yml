@@ -1,0 +1,43 @@
+---
+# Lightweight tests for rrclone-specific config / env fallback.
+# Upstream build.yml is gated to github.repository == rclone/rclone.
+name: fork-tests
+
+on:
+  pull_request:
+    paths:
+      - 'fs/**'
+      - 'fstest/fstest.go'
+      - 'lib/plugin/plugin.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/fork-tests.yml'
+  push:
+    paths:
+      - 'fs/**'
+      - 'fstest/fstest.go'
+      - 'lib/plugin/plugin.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/fork-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+
+      - name: Test env fallback and config
+        run: |
+          go test ./fs -count=1 -timeout 8m
+          go test ./fs/config ./fs/config/flags -count=1 -timeout 8m

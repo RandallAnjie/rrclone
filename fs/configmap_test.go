@@ -91,3 +91,35 @@ func TestOptionEnvVarsRedactsPassword(t *testing.T) {
 	assert.Equal(t, "obscured_pass", value)
 	assert.NotContains(t, buf.String(), "obscured_pass")
 }
+
+func TestLookupEnvWithLegacy(t *testing.T) {
+	t.Setenv("RRCLONE_FOO", "new")
+	t.Setenv("RCLONE_FOO", "old")
+	value, used, ok := LookupEnvWithLegacy("RRCLONE_FOO")
+	assert.True(t, ok)
+	assert.Equal(t, "new", value)
+	assert.Equal(t, "RRCLONE_FOO", used)
+
+	t.Setenv("RCLONE_BAZ", "legacy")
+	value, used, ok = LookupEnvWithLegacy("RRCLONE_BAZ")
+	assert.True(t, ok)
+	assert.Equal(t, "legacy", value)
+	assert.Equal(t, "RCLONE_BAZ", used)
+
+	value, used, ok = LookupEnvWithLegacy("RRCLONE_MISSING")
+	assert.False(t, ok)
+	assert.Equal(t, "", value)
+	assert.Equal(t, "", used)
+}
+
+func TestConfigEnvVarsPrefersRrclonePrefix(t *testing.T) {
+	t.Setenv("RRCLONE_CONFIG_SRC_HOST", "rrclone.example")
+	t.Setenv("RCLONE_CONFIG_SRC_HOST", "rclone.example")
+	config := configEnvVars{
+		configName: "src",
+		options:    Options{{Name: "host"}},
+	}
+	value, ok := config.Get("host")
+	assert.True(t, ok)
+	assert.Equal(t, "rrclone.example", value)
+}

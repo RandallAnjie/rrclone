@@ -1,0 +1,18 @@
+backend: "quarkshare"
+name: Quark Share
+tier: Tier 2
+maintainers: External
+features_score: 2
+integration_tests: Unknown
+data_integrity: Unknown
+performance: High
+adoption: Some use
+docs: Full
+security: High
+virtual: false
+remote: 'TestQuarkShare:'
+features:
+- CanHaveEmptyDirectories
+- DirCacheFlush
+hashes: []
+precision: 1

@@ -29,7 +29,7 @@ Rclone *("rsync for cloud storage")* 是一个用于在各种云存储之间同�
 详细对照表和配置示例在落地页。摘要：
 
 - **自定义 API**：Drive / Dropbox / Photos / Box / OneDrive 可把官方 API 主机换成反代。Drive 要换三个地址（授权、token、API）
-- **国内网盘**：115、123、阿里云盘、百度、夸克、UC、天翼、和彩云、迅雷、蓝奏、微云、沃盘、WPS 等
+- **国内网盘**：115、123、阿里云盘、百度、夸克、UC、天翼、和彩云、迅雷、蓝奏、微云、沃盘、WPS、CloudDrive2 等
 - **AList / OpenList**：接自己的 AList / OpenList 服务器，以及 OpenList 里常见的其它存储（Cloudreve、GitHub、TeraBox、MediaFire、又拍云等）
 - **Google Drive 多 OAuth 账号轮换**：`--drive-oauth-account-files`
 - **rclone 状态看板**：独立的 `dashboard/` Next.js 应用
@@ -91,9 +91,11 @@ Windows 没有 bash 一键脚本，请从 [Releases](https://github.com/RandallA
 - Cloudinary [:page_facing_up:](https://rclone.org/cloudinary/)
 - Cloudreve [:page_facing_up:](https://rclone.org/cloudreve/)
 - Cloudreve V4 [:page_facing_up:](https://rclone.org/cloudrevev4/)
+- CloudDrive2 [:page_facing_up:](https://rclone.org/clouddrive2/)
 - CNB Releases [:page_facing_up:](https://rclone.org/cnbreleases/)
 - Chaoxing [:page_facing_up:](https://rclone.org/chaoxing/)
 - China Telecom Cloud 189 [:page_facing_up:](https://rclone.org/cloud189/)
+- China Telecom Cloud 189 Share [:page_facing_up:](https://rclone.org/cloud189share/)
 - China Mobile Yun 139 [:page_facing_up:](https://rclone.org/yun139/)
 - Cubbit DS3 [:page_facing_up:](https://rclone.org/s3/#Cubbit)
 - DigitalOcean Spaces [:page_facing_up:](https://rclone.org/s3/#digitalocean-spaces)
@@ -186,6 +188,7 @@ Windows 没有 bash 一键脚本，请从 [Releases](https://github.com/RandallA
 - Proton Drive [:page_facing_up:](https://rclone.org/protondrive/)
 - QingStor [:page_facing_up:](https://rclone.org/qingstor/)
 - Quark Drive [:page_facing_up:](https://rclone.org/quark/)
+- Quark Share [:page_facing_up:](https://rclone.org/quarkshare/)
 - Qiniu Cloud Object Storage (Kodo) [:page_facing_up:](https://rclone.org/s3/#qiniu)
 - Rabata Cloud Storage [:page_facing_up:](https://rclone.org/s3/#Rabata)
 - Quatrix [:page_facing_up:](https://rclone.org/quatrix/)

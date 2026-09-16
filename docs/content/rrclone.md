@@ -69,7 +69,9 @@ rrclone 是 [rclone](https://rclone.org) 的增强分支。命令、后端和官
 | [Bunny Storage](/bunny/) | Bunny.net 存储 |
 | [Chaoxing](/chaoxing/) | 超星网盘 |
 | [China Telecom Cloud 189](/cloud189/) | 天翼云盘 |
+| [China Telecom Cloud 189 Share](/cloud189share/) | 天翼云盘分享 |
 | [China Mobile Yun 139](/yun139/) | 和彩云 |
+| [CloudDrive2](/clouddrive2/) | 本机 CloudDrive2 gRPC（多网盘聚合） |
 | [Cloudreve](/cloudreve/) / [V4](/cloudrevev4/) | 自建 Cloudreve |
 | [CNB Releases](/cnbreleases/) | CNB 发行版资产 |
 | [Degoo](/degoo/) | Degoo |
@@ -91,6 +93,7 @@ rrclone 是 [rclone](https://rclone.org) 的增强分支。命令、后端和官
 | [OneDrive Share](/onedriveshare/) | OneDrive 分享链接 |
 | [PikPak Share](/pikpakshare/) | PikPak 分享 |
 | [Quark Drive](/quark/) | 夸克网盘 |
+| [Quark Share](/quarkshare/) | 夸克分享链接 |
 | [TeraBox](/terabox/) | TeraBox |
 | [Teldrive](/teldrive/) | Teldrive |
 | [Teambition](/teambition/) | Teambition |

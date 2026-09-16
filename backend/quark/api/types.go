@@ -4,12 +4,12 @@ package api
 import "time"
 
 const (
-	// DefaultRoot is https://drive.quark.cn/1/clouddrive
-	DefaultRoot = "https://drive.quark.cn/1/clouddrive"
+	// DefaultRoot is the Quark PC client API origin.
+	DefaultRoot = "https://drive-pc.quark.cn/1/clouddrive"
 	// DefaultReferer is the Quark web referer.
 	DefaultReferer = "https://pan.quark.cn"
-	// DefaultUA is a Quark desktop client user agent.
-	DefaultUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) quark-cloud-drive/2.5.20 Chrome/100.0.4896.160 Safari/537.36"
+	// DefaultUA is the Quark desktop client user agent.
+	DefaultUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) quark-cloud-drive/3.14.2 Chrome/112.0.5615.165 Electron/24.1.3.8 Safari/537.36 Channel/pckk_other_ch"
 )
 
 // BaseResp is the common envelope for Quark JSON.
@@ -26,13 +26,13 @@ func (b BaseResp) OK() bool {
 
 // File is a file or folder in a sort response.
 type File struct {
-	Fid        string `json:"fid"`
-	FileName   string `json:"file_name"`
-	PdirFid    string `json:"pdir_fid"`
-	Size       int64  `json:"size"`
-	File       bool   `json:"file"`
-	CreatedAt  int64  `json:"created_at"`
-	UpdatedAt  int64  `json:"updated_at"`
+	Fid       string `json:"fid"`
+	FileName  string `json:"file_name"`
+	PdirFid   string `json:"pdir_fid"`
+	Size      int64  `json:"size"`
+	File      bool   `json:"file"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
 }
 
 // IsDir reports whether the item is a folder.
@@ -86,7 +86,8 @@ type DirResp struct {
 type HashResp struct {
 	BaseResp
 	Data struct {
-		Finish bool `json:"finish"`
+		Finish bool   `json:"finish"`
+		Fid    string `json:"fid"`
 	} `json:"data"`
 }
 
@@ -94,16 +95,24 @@ type HashResp struct {
 type UpPreResp struct {
 	BaseResp
 	Data struct {
-		TaskID    string `json:"task_id"`
-		Finish    bool   `json:"finish"`
-		Fid       string `json:"fid"`
-		AuthInfo  string `json:"auth_info"`
-		UploadID  string `json:"upload_id"`
-		Bucket    string `json:"bucket"`
-		ObjKey    string `json:"obj_key"`
-		UploadURL string `json:"upload_url"`
+		TaskID     string `json:"task_id"`
+		Finish     bool   `json:"finish"`
+		Fid        string `json:"fid"`
+		AuthInfo   string `json:"auth_info"`
+		UploadID   string `json:"upload_id"`
+		Bucket     string `json:"bucket"`
+		ObjKey     string `json:"obj_key"`
+		UploadURL  string `json:"upload_url"`
 		FormatType string `json:"format_type"`
+		Callback   struct {
+			CallbackURL  string `json:"callbackUrl"`
+			CallbackBody string `json:"callbackBody"`
+		} `json:"callback"`
 	} `json:"data"`
+	Metadata struct {
+		PartSize   int `json:"part_size"`
+		PartThread int `json:"part_thread"`
+	} `json:"metadata"`
 }
 
 // UpAuthResp is POST /file/upload/auth

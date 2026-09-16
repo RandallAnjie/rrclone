@@ -103,3 +103,54 @@ func TestMockListAndDownload(t *testing.T) {
 		t.Fatalf("got %q", body)
 	}
 }
+
+func TestWebRefreshTokenList(t *testing.T) {
+	const payload = "hello-web-ali"
+	var ts *httptest.Server
+	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v2/account/token":
+			_, _ = io.WriteString(w, `{"access_token":"webtok","refresh_token":"ref2","expires_in":7200}`)
+		case "/v2/user/get":
+			_, _ = io.WriteString(w, `{"default_drive_id":"drv","user_id":"u1"}`)
+		case "/v2/file/list":
+			_, _ = io.WriteString(w, `{"items":[{"drive_id":"drv","file_id":"20","parent_file_id":"root","name":"readme.txt","type":"file","size":12,"content_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","updated_at":"2024-01-02T03:04:05Z"}],"next_marker":""}`)
+		case "/v2/file/get_download_url":
+			_, _ = io.WriteString(w, `{"url":"`+ts.URL+`/dl/readme"}`)
+		case "/users/v1/users/device/create_session":
+			_, _ = io.WriteString(w, `{"success":true}`)
+		case "/dl/readme":
+			http.ServeContent(w, r, "readme.txt", time.Unix(1700000001, 0), strings.NewReader(payload))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"code":"NotFound","message":"not found"}`)
+		}
+	}))
+	defer ts.Close()
+	m := configmap.Simple{
+		"refresh_token": "ref",
+		"endpoint":      ts.URL,
+	}
+	ctx := context.Background()
+	fsi, err := NewFs(ctx, "testaliweb", "", m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj, err := fsi.NewObject(ctx, "readme.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, err := obj.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	body, err := io.ReadAll(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != payload {
+		t.Fatalf("got %q", body)
+	}
+}

@@ -7,8 +7,12 @@ versionIntroduced: "v1.76.1"
 # Quark Drive
 
 [Quark Drive](https://pan.quark.cn) (夸克网盘) is a Chinese cloud
-storage provider. This backend uses the **Quark web API**
-(`drive.quark.cn`) with the cookies from a logged-in browser session.
+storage provider. This backend uses the **Quark web / PC client API**
+(`drive-pc.quark.cn`) with the cookies from a logged-in browser
+session.
+
+Uploads try hash reuse (秒传) first, then Aliyun OSS multipart when
+the file is new.
 
 ## Configuration
 
@@ -30,8 +34,9 @@ cookie> __uid=...; __puus=...
 rclone lsf remote:
 ```
 
-Cookies expire. Copy a fresh cookie string if rclone starts returning
-login errors.
+Cookies expire. rclone updates `__puus` when the server refreshes
+it. Copy a fresh cookie string if rclone starts returning login
+errors.
 
 ### Modification times and hashes
 
@@ -53,4 +58,5 @@ ID of the root folder. Leave blank to use the account root.
 
 #### --quark-endpoint
 
-Endpoint for the Quark Drive API. Default `https://drive.quark.cn/1/clouddrive`.
+Endpoint for the Quark Drive API. Default
+`https://drive-pc.quark.cn/1/clouddrive`.

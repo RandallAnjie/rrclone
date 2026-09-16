@@ -1,4 +1,4 @@
-// Package _123 provides an interface to 123 Cloud using the Open Platform API.
+// Package _123 provides an interface to 123 Cloud.
 package _123
 
 import (
@@ -20,6 +20,7 @@ import (
 	"github.com/rclone/rclone/fs/config"
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/config/configstruct"
+	"github.com/rclone/rclone/fs/config/obscure"
 	"github.com/rclone/rclone/fs/fserrors"
 	"github.com/rclone/rclone/fs/fshttp"
 	"github.com/rclone/rclone/fs/hash"
@@ -44,26 +45,48 @@ func init() {
 		Description: "123 Cloud",
 		NewFs:       NewFs,
 		Options: []fs.Option{{
+			Name: "user",
+			Help: `123 Cloud username (phone number or email).
+
+The easy path: set user and pass. rclone logs in to the web API
+and stores the token in access_token. Open Platform client_id is
+not required.
+`,
+			Sensitive: true,
+		}, {
+			Name: "pass",
+			Help: `123 Cloud password.
+
+Used with user for web login. rclone obscures this in the config
+file.
+`,
+			Sensitive:  true,
+			IsPassword: true,
+		}, {
 			Name: "client_id",
 			Help: `123 Open Platform client ID.
 
-Apply at https://www.123pan.com/developer. Used with client_secret
-to obtain an access token. Do not use a third-party token broker.
+Optional. Apply at https://www.123pan.com/developer if you want
+the official Open API instead of username/password. Used with
+client_secret. Do not use a third-party token broker.
 `,
 			Sensitive: true,
+			Advanced:  true,
 		}, {
 			Name: "client_secret",
 			Help: `123 Open Platform client secret.
 
-Apply at https://www.123pan.com/developer.
+Apply at https://www.123pan.com/developer. Required with client_id.
 `,
 			Sensitive: true,
+			Advanced:  true,
 		}, {
 			Name: "access_token",
 			Help: `Access token.
 
-Optional if client_id and client_secret are set. Tokens expire;
-rclone refreshes them from the client credentials when possible.
+Filled automatically after web login, or optional if client_id
+and client_secret are set. Tokens expire; rclone refreshes them
+when user/pass or client credentials are set.
 `,
 			Sensitive: true,
 			Advanced:  true,
@@ -88,8 +111,11 @@ id to restrict rclone to that folder.
 			Advanced: true,
 		}, {
 			Name:     "endpoint",
-			Help:     "Endpoint for the 123 Open Platform API.",
-			Default:  api.DefaultRoot,
+			Help:     "Endpoint for the 123 API. Open Platform default is open-api.123pan.com; web login uses www.123pan.com.",
+			Advanced: true,
+		}, {
+			Name:     "login_endpoint",
+			Help:     "Endpoint for unofficial web login. Default https://login.123pan.com/api.",
 			Advanced: true,
 		}, {
 			Name:     config.ConfigEncoding,
@@ -113,6 +139,8 @@ id to restrict rclone to that folder.
 
 // Options defines the configuration of this backend.
 type Options struct {
+	User          string               `config:"user"`
+	Pass          string               `config:"pass"`
 	ClientID      string               `config:"client_id"`
 	ClientSecret  string               `config:"client_secret"`
 	AccessToken   string               `config:"access_token"`
@@ -120,6 +148,7 @@ type Options struct {
 	ListChunk     int                  `config:"list_chunk"`
 	PacerMinSleep fs.Duration          `config:"pacer_min_sleep"`
 	Endpoint      string               `config:"endpoint"`
+	LoginEndpoint string               `config:"login_endpoint"`
 	Enc           encoder.MultiEncoder `config:"encoding"`
 }
 
@@ -138,6 +167,8 @@ type Fs struct {
 	dl       *rest.Client
 	pacer    *fs.Pacer
 	dirCache *dircache.DirCache
+	m        configmap.Mapper
+	web      bool
 	tokenMu  sync.Mutex
 	token    string
 	tokenExp time.Time
@@ -145,14 +176,16 @@ type Fs struct {
 
 // Object describes a 123 Cloud object.
 type Object struct {
-	fs      *Fs
-	remote  string
-	id      string
-	dirID   string
-	md5sum  string
-	sha1sum string
-	size    int64
-	modTime time.Time
+	fs        *Fs
+	remote    string
+	id        string
+	dirID     string
+	md5sum    string
+	sha1sum   string
+	s3KeyFlag string
+	fileType  int
+	size      int64
+	modTime   time.Time
 }
 
 var retryErrorCodes = []int{
@@ -166,6 +199,20 @@ var retryErrorCodes = []int{
 
 func parsePath(p string) string {
 	return strings.Trim(p, "/")
+}
+
+func reveal(s string) string {
+	if s == "" {
+		return ""
+	}
+	if out, err := obscure.Reveal(s); err == nil {
+		return out
+	}
+	return s
+}
+
+func isEmail(s string) bool {
+	return strings.Contains(s, "@")
 }
 
 func shouldRetry(ctx context.Context, resp *http.Response, err error) (bool, error) {
@@ -196,17 +243,27 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	if err != nil {
 		return nil, err
 	}
-	if opt.Endpoint == "" {
-		opt.Endpoint = api.DefaultRoot
-	}
 	if opt.ListChunk <= 0 {
 		opt.ListChunk = 100
 	}
 	if opt.PacerMinSleep <= 0 {
 		opt.PacerMinSleep = fs.Duration(defaultMinSleep)
 	}
-	if strings.TrimSpace(opt.ClientID) == "" && strings.TrimSpace(opt.AccessToken) == "" {
-		return nil, errors.New("123: client_id and client_secret are required (https://www.123pan.com/developer)")
+	opt.Pass = reveal(opt.Pass)
+	user := strings.TrimSpace(opt.User)
+	pass := strings.TrimSpace(opt.Pass)
+	token := strings.TrimSpace(opt.AccessToken)
+	webLogin := user != "" && pass != ""
+	web := webLogin || (token != "" && strings.TrimSpace(opt.ClientID) == "")
+	if !web && strings.TrimSpace(opt.ClientID) == "" && token == "" {
+		return nil, errors.New("123: set user and pass (web login) or client_id and client_secret (Open Platform)")
+	}
+	if opt.Endpoint == "" {
+		if web {
+			opt.Endpoint = api.DefaultWebRoot
+		} else {
+			opt.Endpoint = api.DefaultRoot
+		}
 	}
 	root = parsePath(root)
 	client := fshttp.NewClient(ctx)
@@ -218,14 +275,24 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		name:     name,
 		root:     root,
 		opt:      *opt,
+		m:        m,
+		web:      web,
 		srv:      rest.NewClient(client).SetRoot(strings.TrimRight(opt.Endpoint, "/")),
 		dl:       rest.NewClient(client),
 		pacer:    fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(time.Duration(opt.PacerMinSleep)), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
-		token:    strings.TrimSpace(opt.AccessToken),
+		token:    token,
 		tokenExp: time.Now().Add(90 * 24 * time.Hour),
 	}
 	f.srv.SetErrorHandler(errorHandler)
-	f.srv.SetHeader("Platform", api.PlatformHeader)
+	if web {
+		f.srv.SetHeader("Platform", api.WebPlatformHeader)
+		f.srv.SetHeader("App-Version", api.WebAppVersion)
+		f.srv.SetHeader("Origin", "https://www.123pan.com")
+		f.srv.SetHeader("Referer", "https://www.123pan.com/")
+		f.dl.SetHeader("Referer", "https://www.123pan.com/")
+	} else {
+		f.srv.SetHeader("Platform", api.PlatformHeader)
+	}
 	f.features = (&fs.Features{
 		CaseInsensitive:         false,
 		CanHaveEmptyDirectories: true,
@@ -268,6 +335,19 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 }
 
 func (f *Fs) ensureToken(ctx context.Context, force bool) error {
+	f.tokenMu.Lock()
+	if !force && f.token != "" && time.Now().Before(f.tokenExp.Add(-5*time.Minute)) {
+		f.tokenMu.Unlock()
+		return nil
+	}
+	web := f.web
+	f.tokenMu.Unlock()
+	if web {
+		if force && (strings.TrimSpace(f.opt.User) == "" || strings.TrimSpace(f.opt.Pass) == "") {
+			return fserrors.FatalError(errors.New("123: access token expired; set user and pass to refresh"))
+		}
+		return f.webLogin(ctx)
+	}
 	f.tokenMu.Lock()
 	defer f.tokenMu.Unlock()
 	if !force && f.token != "" && time.Now().Before(f.tokenExp.Add(-5*time.Minute)) {
@@ -321,10 +401,18 @@ func (f *Fs) authHeaders() map[string]string {
 	f.tokenMu.Lock()
 	token := f.token
 	f.tokenMu.Unlock()
-	return map[string]string{
+	h := map[string]string{
 		"Authorization": "Bearer " + token,
-		"Platform":      api.PlatformHeader,
 	}
+	if f.web {
+		h["Platform"] = api.WebPlatformHeader
+		h["App-Version"] = api.WebAppVersion
+		h["Origin"] = "https://www.123pan.com"
+		h["Referer"] = "https://www.123pan.com/"
+	} else {
+		h["Platform"] = api.PlatformHeader
+	}
+	return h
 }
 
 func (f *Fs) doJSON(ctx context.Context, opts *rest.Opts, request any, response codedJSON) error {
@@ -334,6 +422,7 @@ func (f *Fs) doJSON(ctx context.Context, opts *rest.Opts, request any, response 
 		}
 		callOpts := opts.Copy()
 		callOpts.ExtraHeaders = f.authHeaders()
+		f.signRequest(callOpts)
 		resp, err := f.srv.CallJSON(ctx, callOpts, request, response)
 		if err != nil {
 			return shouldRetry(ctx, resp, err)
@@ -366,6 +455,9 @@ func (f *Fs) userInfo(ctx context.Context) (*api.UserInfoResp, error) {
 	opts := rest.Opts{
 		Method: http.MethodGet,
 		Path:   "/api/v1/user/info",
+	}
+	if f.web {
+		opts.Path = "/b/api/user/info"
 	}
 	var info api.UserInfoResp
 	if err := f.doJSON(ctx, &opts, nil, &info); err != nil {
@@ -466,6 +558,9 @@ func (f *Fs) readMetaDataForPath(ctx context.Context, remote string) (*api.File,
 type listAllFn func(*api.File) bool
 
 func (f *Fs) listAll(ctx context.Context, dirID string, directoriesOnly, filesOnly bool, fn listAllFn) (found bool, err error) {
+	if f.web {
+		return f.webListAll(ctx, dirID, directoriesOnly, filesOnly, fn)
+	}
 	parentID, err := api.ParseID(dirID)
 	if err != nil {
 		return false, err
@@ -531,6 +626,9 @@ func (f *Fs) FindLeaf(ctx context.Context, pathID, leaf string) (pathIDOut strin
 
 // CreateDir makes a directory with pathID as parent and name leaf
 func (f *Fs) CreateDir(ctx context.Context, pathID, leaf string) (newID string, err error) {
+	if f.web {
+		return f.webCreateDir(ctx, pathID, leaf)
+	}
 	opts := rest.Opts{
 		Method: http.MethodPost,
 		Path:   "/upload/v1/file/mkdir",
@@ -639,6 +737,9 @@ func (f *Fs) trashIDs(ctx context.Context, ids ...int64) error {
 	if len(ids) == 0 {
 		return nil
 	}
+	if f.web {
+		return f.webTrash(ctx, ids...)
+	}
 	opts := rest.Opts{
 		Method: http.MethodPost,
 		Path:   "/api/v1/file/trash",
@@ -711,6 +812,9 @@ func (f *Fs) About(ctx context.Context) (*fs.Usage, error) {
 }
 
 func (f *Fs) rename(ctx context.Context, id int64, newLeaf string) error {
+	if f.web {
+		return f.webRename(ctx, id, newLeaf)
+	}
 	opts := rest.Opts{
 		Method: http.MethodPut,
 		Path:   "/api/v1/file/name",
@@ -724,6 +828,9 @@ func (f *Fs) rename(ctx context.Context, id int64, newLeaf string) error {
 }
 
 func (f *Fs) move(ctx context.Context, id, newDirID int64) error {
+	if f.web {
+		return f.webMove(ctx, id, newDirID)
+	}
 	opts := rest.Opts{
 		Method: http.MethodPost,
 		Path:   "/api/v1/file/move",
@@ -831,13 +938,16 @@ func (f *Fs) completeUpload(ctx context.Context, preuploadID string) (*api.Uploa
 	return &info, nil
 }
 
-func (f *Fs) downloadURL(ctx context.Context, fileID string) (string, error) {
+func (f *Fs) downloadURL(ctx context.Context, o *Object) (string, error) {
+	if f.web {
+		return f.webDownloadURL(ctx, o)
+	}
 	opts := rest.Opts{
 		Method:     http.MethodGet,
 		Path:       "/api/v1/file/download_info",
 		Parameters: url.Values{},
 	}
-	opts.Parameters.Set("fileId", fileID)
+	opts.Parameters.Set("fileId", o.id)
 	var info api.DownloadInfoResp
 	if err := f.doJSON(ctx, &opts, nil, &info); err != nil {
 		return "", err
@@ -902,6 +1012,9 @@ func (f *Fs) Copy(ctx context.Context, src fs.Object, remote string) (fs.Object,
 	if !ok {
 		fs.Debugf(src, "Can't copy - not same remote type")
 		return nil, fs.ErrorCantCopy
+	}
+	if f.web {
+		return f.webCopy(ctx, srcObj, remote)
 	}
 	if srcObj.md5sum == "" {
 		return nil, fs.ErrorCantCopy
@@ -976,6 +1089,8 @@ func (o *Object) setMetaData(info *api.File) error {
 	o.dirID = info.Parent()
 	o.size = info.Size
 	o.modTime = info.ModTime()
+	o.s3KeyFlag = info.S3KeyFlag
+	o.fileType = info.Type
 	etag := strings.ToLower(info.Etag)
 	if len(etag) == 32 {
 		o.md5sum = etag
@@ -1030,7 +1145,7 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 	fs.FixRangeOption(options, o.size)
 	var resp *http.Response
 	err = o.fs.pacer.Call(func() (bool, error) {
-		targetURL, err := o.fs.downloadURL(ctx, o.id)
+		targetURL, err := o.fs.downloadURL(ctx, o)
 		if err != nil {
 			return shouldRetry(ctx, resp, err)
 		}

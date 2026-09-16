@@ -7,12 +7,19 @@ versionIntroduced: "v1.76.1"
 # Aliyun Drive
 
 [Aliyun Drive](https://www.alipan.com) (阿里云盘) is a Chinese cloud
-storage provider. This backend uses the **Aliyun Drive Open API**
-(`openapi.alipan.com`).
+storage provider.
 
-Create an app at [alipan.com/developer](https://www.alipan.com/developer)
-and complete OAuth to obtain a refresh token, client ID and client
-secret. Do not use a third-party token broker.
+The easy path is a **web refresh_token** only. Log in at
+[alipan.com](https://www.alipan.com), open DevTools → Application →
+Local Storage, and copy the `refresh_token` (or the token JSON's
+`refresh_token` field). rclone uses the web API
+(`auth.alipan.com` / `api.alipan.com`) and does not need a developer
+app.
+
+To use the official Open API (`openapi.alipan.com`) instead, create
+an app at [alipan.com/developer](https://www.alipan.com/developer)
+and set `client_id` and `client_secret` together with the Open API
+refresh token. Do not use a third-party token broker.
 
 ## Configuration
 
@@ -25,8 +32,6 @@ n/s/q> n
 name> remote
 Storage> alipan
 refresh_token> YOUR_REFRESH_TOKEN
-client_id> YOUR_CLIENT_ID
-client_secret> YOUR_CLIENT_SECRET
 ```
 
 ```console
@@ -43,21 +48,22 @@ them. SHA-1 is used for rapid upload when the source provides it.
 
 #### --alipan-refresh_token
 
-Aliyun Drive refresh token.
-
-#### --alipan-client_id
-
-OAuth client ID.
-
-#### --alipan-client_secret
-
-OAuth client secret.
+Aliyun Drive refresh token from www.alipan.com, or from an Open API
+app.
 
 ### Advanced options
 
+#### --alipan-client_id
+
+OAuth client ID. Leave empty for web refresh_token login.
+
+#### --alipan-client_secret
+
+OAuth client secret. Required with client_id for the Open API.
+
 #### --alipan-access_token
 
-Access token. Optional if refresh credentials are set.
+Access token. Optional if refresh_token is set.
 
 #### --alipan-drive_id
 
@@ -69,4 +75,11 @@ ID of the root folder. Leave blank to use `root`.
 
 #### --alipan-endpoint
 
-Endpoint for the Aliyun Drive Open API. Default `https://openapi.alipan.com`.
+Endpoint for the Aliyun Drive API. Web login defaults to
+`https://api.alipan.com`. Open API default is
+`https://openapi.alipan.com`.
+
+#### --alipan-token_endpoint
+
+Token URL for web refresh_token login. Default
+`https://auth.alipan.com/v2/account/token`.

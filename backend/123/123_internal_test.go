@@ -44,6 +44,18 @@ func TestParseID(t *testing.T) {
 	}
 }
 
+func TestBaseRespErr(t *testing.T) {
+	if (api.BaseResp{Code: 0}).Err() != nil {
+		t.Fatal("code 0 should succeed")
+	}
+	if (api.BaseResp{Code: 200}).Err() != nil {
+		t.Fatal("code 200 should succeed")
+	}
+	if (api.BaseResp{Code: 401, Message: "expired"}).Err() == nil {
+		t.Fatal("code 401 should fail")
+	}
+}
+
 func TestNewFsMissingCredentials(t *testing.T) {
 	_, err := NewFs(context.Background(), "x", "", configmap.Simple{})
 	if err == nil {
@@ -165,5 +177,85 @@ func TestPrecision(t *testing.T) {
 	}
 	if !f.Hashes().Contains(hash.MD5) || !f.Hashes().Contains(hash.SHA1) {
 		t.Fatal("expected md5 and sha1")
+	}
+}
+
+func TestAPISign(t *testing.T) {
+	k, v := apiSign("/b/api/file/list/new")
+	if k == "" || v == "" || !strings.Contains(v, "-") {
+		t.Fatalf("sign %q %q", k, v)
+	}
+}
+
+func TestWebLoginListDownload(t *testing.T) {
+	const payload = "hello-web"
+	var ts *httptest.Server
+	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/user/sign_in":
+			_, _ = io.WriteString(w, `{"code":200,"data":{"token":"webtok","expire":4102444800}}`)
+		case r.URL.Path == "/b/api/user/info":
+			if !strings.Contains(r.Header.Get("Authorization"), "Bearer webtok") {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = io.WriteString(w, `{"code":401,"message":"no auth"}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"code":0,"data":{"uid":1,"spaceUsed":1,"spacePermanent":100,"spaceTemp":0}}`)
+		case r.URL.Path == "/b/api/file/list/new":
+			_, _ = io.WriteString(w, `{"code":0,"data":{"Next":"-1","InfoList":[{"FileName":"docs","FileId":10,"Type":1,"UpdateAt":"2024-01-02T03:04:05+08:00"},{"FileName":"readme.txt","FileId":20,"Type":0,"Size":10,"Etag":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","S3KeyFlag":"s3","UpdateAt":"2024-01-02 03:04:05"}]}}`)
+		case r.URL.Path == "/b/api/file/download_info":
+			_, _ = io.WriteString(w, `{"code":0,"data":{"DownloadUrl":"`+ts.URL+`/dl/readme"}}`)
+		case r.URL.Path == "/dl/readme":
+			http.ServeContent(w, r, "readme.txt", time.Unix(1700000001, 0), strings.NewReader(payload))
+		case r.URL.Path == "/b/api/file/upload_request":
+			_, _ = io.WriteString(w, `{"code":0,"data":{"FileId":30,"Reuse":true}}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"code":404,"message":"not found"}`)
+		}
+	}))
+	defer ts.Close()
+	m := configmap.Simple{
+		"user":           "13800000000",
+		"pass":           "secret",
+		"endpoint":       ts.URL,
+		"login_endpoint": ts.URL,
+	}
+	ctx := context.Background()
+	fsi, err := NewFs(ctx, "test123web", "", m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := fsi.List(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries=%d", len(entries))
+	}
+	obj, err := fsi.NewObject(ctx, "readme.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, err := obj.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	got, err := io.ReadAll(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != payload {
+		t.Fatalf("got %q", got)
+	}
+	src := object.NewStaticObjectInfo("hello.txt", time.Now(), int64(len(payload)), true, map[hash.Type]string{hash.MD5: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, nil)
+	newObj, err := fsi.Put(ctx, bytes.NewReader([]byte(payload)), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newObj.Size() != int64(len(payload)) {
+		t.Fatalf("uploaded size=%d", newObj.Size())
 	}
 }

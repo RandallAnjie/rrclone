@@ -13,6 +13,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rclone/rclone/backend/quark/api"
@@ -35,6 +36,8 @@ const (
 	maxSleep        = 4 * time.Second
 	decayConstant   = 2
 	rootID          = "0"
+	ossUserAgent    = "aliyun-sdk-js/6.6.1 Chrome 98.0.4758.80 on Windows 10 64-bit"
+	defaultPartSize = 4 << 20
 )
 
 func init() {
@@ -99,6 +102,8 @@ type Fs struct {
 	dl       *rest.Client
 	pacer    *fs.Pacer
 	dirCache *dircache.DirCache
+	m        configmap.Mapper
+	cookieMu sync.Mutex
 }
 
 // Object describes a Quark object.
@@ -169,6 +174,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		name:  name,
 		root:  root,
 		opt:   *opt,
+		m:     m,
 		srv:   rest.NewClient(client).SetRoot(strings.TrimRight(opt.Endpoint, "/")),
 		dl:    rest.NewClient(client),
 		pacer: fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(defaultMinSleep), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
@@ -213,10 +219,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 func (f *Fs) ping(ctx context.Context) error {
 	opts := rest.Opts{Method: http.MethodGet, Path: "/config", Parameters: commonQuery()}
 	var info api.BaseResp
-	err := f.pacer.Call(func() (bool, error) {
-		resp, err := f.srv.CallJSON(ctx, &opts, nil, &info)
-		return shouldRetry(ctx, resp, err)
-	})
+	err := f.callJSON(ctx, &opts, nil, &info)
 	if err != nil {
 		return err
 	}
@@ -226,13 +229,71 @@ func (f *Fs) ping(ctx context.Context) error {
 	return nil
 }
 
-func (f *Fs) Name() string          { return f.name }
-func (f *Fs) Root() string          { return f.root }
-func (f *Fs) String() string         { return fmt.Sprintf("Quark Drive root '%s'", f.root) }
-func (f *Fs) Features() *fs.Features { return f.features }
+func (f *Fs) callJSON(ctx context.Context, opts *rest.Opts, request, response any) error {
+	return f.pacer.Call(func() (bool, error) {
+		resp, err := f.srv.CallJSON(ctx, opts, request, response)
+		f.harvestCookies(resp)
+		return shouldRetry(ctx, resp, err)
+	})
+}
+
+func (f *Fs) harvestCookies(resp *http.Response) {
+	if resp == nil {
+		return
+	}
+	f.cookieMu.Lock()
+	defer f.cookieMu.Unlock()
+	cookie := f.opt.Cookie
+	changed := false
+	for _, c := range resp.Cookies() {
+		if c.Name == "__puus" || c.Name == "__pus" {
+			cookie = setCookieValue(cookie, c.Name, c.Value)
+			changed = true
+		}
+	}
+	if !changed {
+		return
+	}
+	f.opt.Cookie = cookie
+	f.srv.SetHeader("Cookie", cookie)
+	f.dl.SetHeader("Cookie", cookie)
+	if f.m != nil {
+		f.m.Set("cookie", cookie)
+	}
+}
+
+func setCookieValue(header, name, value string) string {
+	parts := strings.Split(header, ";")
+	found := false
+	for i, part := range parts {
+		part = strings.TrimSpace(part)
+		n, _, ok := strings.Cut(part, "=")
+		if ok && strings.TrimSpace(n) == name {
+			parts[i] = name + "=" + value
+			found = true
+		} else {
+			parts[i] = part
+		}
+	}
+	if !found {
+		return strings.TrimSpace(header) + "; " + name + "=" + value
+	}
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+func (f *Fs) Name() string             { return f.name }
+func (f *Fs) Root() string             { return f.root }
+func (f *Fs) String() string           { return fmt.Sprintf("Quark Drive root '%s'", f.root) }
+func (f *Fs) Features() *fs.Features   { return f.features }
 func (f *Fs) Precision() time.Duration { return time.Millisecond }
-func (f *Fs) Hashes() hash.Set        { return hash.NewHashSet(hash.MD5, hash.SHA1) }
-func (f *Fs) DirCacheFlush()         { f.dirCache.ResetRoot() }
+func (f *Fs) Hashes() hash.Set         { return hash.NewHashSet(hash.MD5, hash.SHA1) }
+func (f *Fs) DirCacheFlush()           { f.dirCache.ResetRoot() }
 
 func (f *Fs) newObjectWithInfo(ctx context.Context, remote string, info *api.File) (fs.Object, error) {
 	o := &Object{fs: f, remote: remote}
@@ -257,10 +318,7 @@ func (f *Fs) listAll(ctx context.Context, dirID string, directoriesOnly, filesOn
 		opts.Parameters.Set("_page", strconv.Itoa(page))
 		opts.Parameters.Set("_size", strconv.Itoa(size))
 		var info api.SortResp
-		err := f.pacer.Call(func() (bool, error) {
-			resp, err := f.srv.CallJSON(ctx, &opts, nil, &info)
-			return shouldRetry(ctx, resp, err)
-		})
+		err := f.callJSON(ctx, &opts, nil, &info)
 		if err != nil {
 			return false, err
 		}
@@ -334,10 +392,7 @@ func (f *Fs) CreateDir(ctx context.Context, pathID, leaf string) (string, error)
 		"pdir_fid":      pathID,
 	}
 	var info api.DirResp
-	err := f.pacer.Call(func() (bool, error) {
-		resp, err := f.srv.CallJSON(ctx, &opts, &req, &info)
-		return shouldRetry(ctx, resp, err)
-	})
+	err := f.callJSON(ctx, &opts, &req, &info)
 	if err != nil {
 		return "", err
 	}
@@ -423,10 +478,7 @@ func (f *Fs) deleteIDs(ctx context.Context, ids ...string) error {
 	opts := rest.Opts{Method: http.MethodPost, Path: "/file/delete", Parameters: commonQuery()}
 	req := map[string]any{"action_type": 1, "filelist": ids}
 	var info api.BaseResp
-	err := f.pacer.Call(func() (bool, error) {
-		resp, err := f.srv.CallJSON(ctx, &opts, &req, &info)
-		return shouldRetry(ctx, resp, err)
-	})
+	err := f.callJSON(ctx, &opts, &req, &info)
 	if err != nil {
 		return err
 	}
@@ -468,10 +520,7 @@ func (f *Fs) rename(ctx context.Context, id, newLeaf string) error {
 	opts := rest.Opts{Method: http.MethodPost, Path: "/file/rename", Parameters: commonQuery()}
 	req := map[string]any{"fid": id, "file_name": f.opt.Enc.FromStandardName(newLeaf)}
 	var info api.BaseResp
-	err := f.pacer.Call(func() (bool, error) {
-		resp, err := f.srv.CallJSON(ctx, &opts, &req, &info)
-		return shouldRetry(ctx, resp, err)
-	})
+	err := f.callJSON(ctx, &opts, &req, &info)
 	if err != nil {
 		return err
 	}
@@ -485,10 +534,7 @@ func (f *Fs) move(ctx context.Context, id, newDirID string) error {
 	opts := rest.Opts{Method: http.MethodPost, Path: "/file/move", Parameters: commonQuery()}
 	req := map[string]any{"action_type": 1, "to_pdir_fid": newDirID, "filelist": []string{id}}
 	var info api.BaseResp
-	err := f.pacer.Call(func() (bool, error) {
-		resp, err := f.srv.CallJSON(ctx, &opts, &req, &info)
-		return shouldRetry(ctx, resp, err)
-	})
+	err := f.callJSON(ctx, &opts, &req, &info)
 	if err != nil {
 		return err
 	}
@@ -516,10 +562,7 @@ func (f *Fs) downloadURL(ctx context.Context, id string) (string, error) {
 	opts := rest.Opts{Method: http.MethodPost, Path: "/file/download", Parameters: commonQuery()}
 	req := map[string]any{"fids": []string{id}}
 	var info api.DownloadResp
-	err := f.pacer.Call(func() (bool, error) {
-		resp, err := f.srv.CallJSON(ctx, &opts, &req, &info)
-		return shouldRetry(ctx, resp, err)
-	})
+	err := f.callJSON(ctx, &opts, &req, &info)
 	if err != nil {
 		return "", err
 	}
@@ -585,14 +628,14 @@ func (o *Object) readMetaData(ctx context.Context) error {
 	return o.setMetaData(info)
 }
 
-func (o *Object) Fs() fs.Info                              { return o.fs }
-func (o *Object) String() string                               { return o.remote }
-func (o *Object) Remote() string                                { return o.remote }
+func (o *Object) Fs() fs.Info                                 { return o.fs }
+func (o *Object) String() string                              { return o.remote }
+func (o *Object) Remote() string                              { return o.remote }
 func (o *Object) Size() int64                                 { return o.size }
-func (o *Object) ModTime(_ context.Context) time.Time          { return o.modTime }
+func (o *Object) ModTime(_ context.Context) time.Time         { return o.modTime }
 func (o *Object) SetModTime(context.Context, time.Time) error { return fs.ErrorCantSetModTime }
-func (o *Object) Storable() bool                                { return true }
-func (o *Object) ID() string                                    { return o.id }
+func (o *Object) Storable() bool                              { return true }
+func (o *Object) ID() string                                  { return o.id }
 func (o *Object) ParentID() string                            { return o.dirID }
 func (o *Object) Hash(context.Context, hash.Type) (string, error) {
 	return "", hash.ErrUnsupported
@@ -668,10 +711,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, _ 
 		"size":            n,
 	}
 	var pre api.UpPreResp
-	err = o.fs.pacer.Call(func() (bool, error) {
-		resp, err := o.fs.srv.CallJSON(ctx, &preOpts, &preReq, &pre)
-		return shouldRetry(ctx, resp, err)
-	})
+	err = o.fs.callJSON(ctx, &preOpts, &preReq, &pre)
 	if err != nil {
 		return err
 	}
@@ -684,19 +724,24 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, _ 
 	hashOpts := rest.Opts{Method: http.MethodPost, Path: "/file/update/hash", Parameters: commonQuery()}
 	hashReq := map[string]any{"md5": sums[hash.MD5], "sha1": sums[hash.SHA1], "task_id": pre.Data.TaskID}
 	var hashInfo api.HashResp
-	err = o.fs.pacer.Call(func() (bool, error) {
-		resp, err := o.fs.srv.CallJSON(ctx, &hashOpts, &hashReq, &hashInfo)
-		return shouldRetry(ctx, resp, err)
-	})
+	err = o.fs.callJSON(ctx, &hashOpts, &hashReq, &hashInfo)
 	if err != nil {
 		return err
 	}
 	if hashInfo.Data.Finish {
+		if hashInfo.Data.Fid != "" {
+			o.id = hashInfo.Data.Fid
+		}
 		o.size = n
 		o.modTime = src.ModTime(ctx)
 		return nil
 	}
-	return errors.New("quark: file is not eligible for hash reuse; OSS multipart upload is not implemented yet")
+	if err := o.ossUpload(ctx, rw, n, pre); err != nil {
+		return err
+	}
+	o.size = n
+	o.modTime = src.ModTime(ctx)
+	return nil
 }
 
 var (

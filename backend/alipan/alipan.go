@@ -1,4 +1,4 @@
-// Package alipan provides an interface to Aliyun Drive using the Open API.
+// Package alipan provides an interface to Aliyun Drive.
 package alipan
 
 import (
@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rclone/rclone/backend/alipan/api"
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config"
@@ -45,23 +46,32 @@ func init() {
 			Name: "refresh_token",
 			Help: `Aliyun Drive refresh token.
 
-Create an app at https://www.alipan.com/developer and complete
-OAuth. rclone refreshes the access token with client_id and
-client_secret. Do not use a third-party token broker.
+Easy path: paste the refresh_token from a logged-in
+https://www.alipan.com session (DevTools → Application →
+Local Storage → token). rclone uses the web API and does
+not need a developer app.
+
+Advanced: create an app at https://www.alipan.com/developer
+and set client_id and client_secret to use the Open API.
 `,
 			Sensitive: true,
 		}, {
 			Name: "client_id",
 			Help: `OAuth client ID from the Aliyun Drive developer console.
 
-Required together with client_secret to refresh the token.
+Optional. Leave empty to use the web API with refresh_token
+only. Required together with client_secret for the Open API.
 `,
 			Sensitive: true,
+			Advanced:  true,
 		}, {
 			Name: "client_secret",
 			Help: `OAuth client secret from the Aliyun Drive developer console.
+
+Required with client_id for the Open API.
 `,
 			Sensitive: true,
+			Advanced:  true,
 		}, {
 			Name: "access_token",
 			Help: `Access token.
@@ -94,8 +104,11 @@ Leave blank to use "root".
 			Advanced: true,
 		}, {
 			Name:     "endpoint",
-			Help:     "Endpoint for the Aliyun Drive Open API.",
-			Default:  api.DefaultRoot,
+			Help:     "Endpoint for the Aliyun Drive API. Open API default is openapi.alipan.com; web token login uses api.alipan.com.",
+			Advanced: true,
+		}, {
+			Name:     "token_endpoint",
+			Help:     "Token URL for web refresh_token login. Default https://auth.alipan.com/v2/account/token.",
 			Advanced: true,
 		}, {
 			Name:     config.ConfigEncoding,
@@ -120,23 +133,30 @@ type Options struct {
 	RootFolderID  string               `config:"root_folder_id"`
 	ListChunk     int                  `config:"list_chunk"`
 	Endpoint      string               `config:"endpoint"`
+	TokenEndpoint string               `config:"token_endpoint"`
 	Enc           encoder.MultiEncoder `config:"encoding"`
 }
 
 // Fs represents a remote Aliyun Drive.
 type Fs struct {
-	name     string
-	root     string
-	opt      Options
-	features *fs.Features
-	srv      *rest.Client
-	dl       *rest.Client
-	pacer    *fs.Pacer
-	dirCache *dircache.DirCache
-	tokenMu  sync.Mutex
-	token    string
-	tokenExp time.Time
-	driveID  string
+	name      string
+	root      string
+	opt       Options
+	features  *fs.Features
+	srv       *rest.Client
+	dl        *rest.Client
+	pacer     *fs.Pacer
+	dirCache  *dircache.DirCache
+	tokenMu   sync.Mutex
+	token     string
+	tokenExp  time.Time
+	driveID   string
+	m         configmap.Mapper
+	web       bool
+	userID    string
+	sigMu     sync.RWMutex
+	deviceID  string
+	signature string
 }
 
 // Object describes an Aliyun Drive object.
@@ -184,14 +204,19 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	if err != nil {
 		return nil, err
 	}
-	if opt.Endpoint == "" {
-		opt.Endpoint = api.DefaultRoot
-	}
 	if opt.ListChunk <= 0 {
 		opt.ListChunk = 100
 	}
-	if opt.AccessToken == "" && (opt.RefreshToken == "" || opt.ClientID == "" || opt.ClientSecret == "") {
-		return nil, errors.New("alipan: refresh_token, client_id and client_secret are required (https://www.alipan.com/developer)")
+	web := strings.TrimSpace(opt.ClientID) == "" || strings.TrimSpace(opt.ClientSecret) == ""
+	if strings.TrimSpace(opt.AccessToken) == "" && strings.TrimSpace(opt.RefreshToken) == "" {
+		return nil, errors.New("alipan: refresh_token is required (from www.alipan.com, or with client_id/client_secret for the Open API)")
+	}
+	if opt.Endpoint == "" {
+		if web {
+			opt.Endpoint = api.DefaultWebRoot
+		} else {
+			opt.Endpoint = api.DefaultRoot
+		}
 	}
 	root = parsePath(root)
 	client := fshttp.NewClient(ctx)
@@ -203,6 +228,8 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		name:     name,
 		root:     root,
 		opt:      *opt,
+		m:        m,
+		web:      web,
 		srv:      rest.NewClient(client).SetRoot(strings.TrimRight(opt.Endpoint, "/")),
 		dl:       rest.NewClient(client),
 		pacer:    fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(defaultMinSleep), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
@@ -219,14 +246,20 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	if err := f.ensureToken(ctx, false); err != nil {
 		return nil, err
 	}
-	if f.driveID == "" {
+	if f.driveID == "" || f.web {
 		info, err := f.driveInfo(ctx)
 		if err != nil {
 			return nil, err
 		}
-		f.driveID = info.DefaultDriveID
 		if f.driveID == "" {
-			f.driveID = info.ResourceDriveID
+			f.driveID = info.DefaultDriveID
+			if f.driveID == "" {
+				f.driveID = info.ResourceDriveID
+			}
+		}
+		if f.web {
+			f.userID = info.UserID
+			_ = f.initWebSession(ctx)
 		}
 	}
 	err = f.dirCache.FindRoot(ctx, false)
@@ -259,6 +292,12 @@ func (f *Fs) ensureToken(ctx context.Context, force bool) error {
 	defer f.tokenMu.Unlock()
 	if !force && f.token != "" && time.Now().Before(f.tokenExp.Add(-2*time.Minute)) {
 		return nil
+	}
+	if f.web {
+		if force && strings.TrimSpace(f.opt.RefreshToken) == "" {
+			return fserrors.FatalError(errors.New("alipan: token expired; set refresh_token"))
+		}
+		return f.webRefreshLocked(ctx)
 	}
 	if f.opt.ClientID == "" || f.opt.ClientSecret == "" || f.opt.RefreshToken == "" {
 		if f.token != "" && !force {
@@ -303,7 +342,20 @@ func (f *Fs) authHeaders() map[string]string {
 	f.tokenMu.Lock()
 	token := f.token
 	f.tokenMu.Unlock()
-	return map[string]string{"Authorization": "Bearer " + token}
+	h := map[string]string{"Authorization": "Bearer " + token}
+	if f.web {
+		f.sigMu.RLock()
+		if f.signature != "" {
+			h["X-Signature"] = f.signature
+			h["X-Device-Id"] = f.deviceID
+			h["X-Canary"] = "client=Android,app=adrive,version=v4.1.0"
+			h["x-request-id"] = uuid.NewString()
+		}
+		f.sigMu.RUnlock()
+		h["Origin"] = "https://www.alipan.com"
+		h["Referer"] = "https://www.alipan.com/"
+	}
+	return h
 }
 
 func (f *Fs) doJSON(ctx context.Context, opts *rest.Opts, request, response any) error {
@@ -320,12 +372,36 @@ func (f *Fs) doJSON(ctx context.Context, opts *rest.Opts, request, response any)
 			}
 			return true, err
 		}
+		if err != nil {
+			var apiErr api.Error
+			if errors.As(err, &apiErr) {
+				switch apiErr.Code {
+				case "AccessTokenInvalid":
+					if rerr := f.ensureToken(ctx, true); rerr != nil {
+						return false, rerr
+					}
+					return true, err
+				case "DeviceSessionSignatureInvalid":
+					if rerr := f.initWebSession(ctx); rerr != nil {
+						return false, rerr
+					}
+					return true, err
+				}
+			}
+		}
 		return shouldRetry(ctx, resp, err)
 	})
 }
 
+func (f *Fs) apiPath(openPath, webPath string) string {
+	if f.web {
+		return webPath
+	}
+	return openPath
+}
+
 func (f *Fs) driveInfo(ctx context.Context) (*api.DriveInfoResp, error) {
-	opts := rest.Opts{Method: http.MethodPost, Path: "/adrive/v1.0/user/getDriveInfo"}
+	opts := rest.Opts{Method: http.MethodPost, Path: f.apiPath("/adrive/v1.0/user/getDriveInfo", "/v2/user/get")}
 	var info api.DriveInfoResp
 	if err := f.doJSON(ctx, &opts, map[string]string{}, &info); err != nil {
 		return nil, err
@@ -381,7 +457,7 @@ func (f *Fs) listAll(ctx context.Context, dirID string, directoriesOnly, filesOn
 			OrderBy:        "name",
 			OrderDirection: "ASC",
 		}
-		opts := rest.Opts{Method: http.MethodPost, Path: "/adrive/v1.0/openFile/list"}
+		opts := rest.Opts{Method: http.MethodPost, Path: f.apiPath("/adrive/v1.0/openFile/list", "/v2/file/list")}
 		var info api.ListResp
 		if err := f.doJSON(ctx, &opts, &req, &info); err != nil {
 			return false, err
@@ -454,7 +530,7 @@ func (f *Fs) CreateDir(ctx context.Context, pathID, leaf string) (newID string, 
 		CheckNameMode: "refuse",
 		Type:          "folder",
 	}
-	opts := rest.Opts{Method: http.MethodPost, Path: "/adrive/v1.0/openFile/createFolder"}
+	opts := rest.Opts{Method: http.MethodPost, Path: f.apiPath("/adrive/v1.0/openFile/createFolder", "/adrive/v2/file/createWithFolders")}
 	var info api.CreateFolderResp
 	if err := f.doJSON(ctx, &opts, &req, &info); err != nil {
 		id, found, findErr := f.FindLeaf(ctx, pathID, leaf)
@@ -546,7 +622,7 @@ func (f *Fs) Mkdir(ctx context.Context, dir string) error {
 
 func (f *Fs) trash(ctx context.Context, id string) error {
 	req := api.TrashReq{DriveID: f.driveID, FileID: id}
-	opts := rest.Opts{Method: http.MethodPost, Path: "/adrive/v1.0/openFile/recyclebin/trash"}
+	opts := rest.Opts{Method: http.MethodPost, Path: f.apiPath("/adrive/v1.0/openFile/recyclebin/trash", "/v2/recyclebin/trash")}
 	return f.doJSON(ctx, &opts, &req, nil)
 }
 
@@ -583,7 +659,7 @@ func (f *Fs) Purge(ctx context.Context, dir string) error { return f.purgeCheck(
 
 // About gets quota information
 func (f *Fs) About(ctx context.Context) (*fs.Usage, error) {
-	opts := rest.Opts{Method: http.MethodPost, Path: "/adrive/v1.0/user/getSpaceInfo"}
+	opts := rest.Opts{Method: http.MethodPost, Path: f.apiPath("/adrive/v1.0/user/getSpaceInfo", "/adrive/v1/user/getSpaceInfo")}
 	var info api.SpaceResp
 	if err := f.doJSON(ctx, &opts, map[string]string{}, &info); err != nil {
 		return nil, err
@@ -604,13 +680,13 @@ func (f *Fs) About(ctx context.Context) (*fs.Usage, error) {
 
 func (f *Fs) rename(ctx context.Context, id, newLeaf string) error {
 	req := api.UpdateReq{DriveID: f.driveID, FileID: id, Name: f.opt.Enc.FromStandardName(newLeaf)}
-	opts := rest.Opts{Method: http.MethodPost, Path: "/adrive/v1.0/openFile/update"}
+	opts := rest.Opts{Method: http.MethodPost, Path: f.apiPath("/adrive/v1.0/openFile/update", "/v3/file/update")}
 	return f.doJSON(ctx, &opts, &req, nil)
 }
 
 func (f *Fs) move(ctx context.Context, id, newDirID string) error {
 	req := api.MoveReq{DriveID: f.driveID, FileID: id, ToParentFileID: newDirID, CheckNameMode: "auto_rename"}
-	opts := rest.Opts{Method: http.MethodPost, Path: "/adrive/v1.0/openFile/move"}
+	opts := rest.Opts{Method: http.MethodPost, Path: f.apiPath("/adrive/v1.0/openFile/move", "/v2/file/move")}
 	return f.doJSON(ctx, &opts, &req, nil)
 }
 
@@ -629,8 +705,8 @@ func (f *Fs) moveTo(ctx context.Context, id, srcLeaf, dstLeaf, srcDirectoryID, d
 }
 
 func (f *Fs) downloadURL(ctx context.Context, fileID string) (string, error) {
-	req := api.DownloadReq{DriveID: f.driveID, FileID: fileID}
-	opts := rest.Opts{Method: http.MethodPost, Path: "/adrive/v1.0/openFile/getDownloadUrl"}
+	req := api.DownloadReq{DriveID: f.driveID, FileID: fileID, ExpireSec: 14400}
+	opts := rest.Opts{Method: http.MethodPost, Path: f.apiPath("/adrive/v1.0/openFile/getDownloadUrl", "/v2/file/get_download_url")}
 	var info api.DownloadResp
 	if err := f.doJSON(ctx, &opts, &req, &info); err != nil {
 		return "", err
@@ -700,15 +776,15 @@ func (o *Object) readMetaData(ctx context.Context) error {
 	return o.setMetaData(info)
 }
 
-func (o *Object) Fs() fs.Info                 { return o.fs }
-func (o *Object) String() string                { return o.remote }
-func (o *Object) Remote() string                 { return o.remote }
-func (o *Object) Size() int64                   { return o.size }
-func (o *Object) ModTime(_ context.Context) time.Time { return o.modTime }
+func (o *Object) Fs() fs.Info                                 { return o.fs }
+func (o *Object) String() string                              { return o.remote }
+func (o *Object) Remote() string                              { return o.remote }
+func (o *Object) Size() int64                                 { return o.size }
+func (o *Object) ModTime(_ context.Context) time.Time         { return o.modTime }
 func (o *Object) SetModTime(context.Context, time.Time) error { return fs.ErrorCantSetModTime }
-func (o *Object) Storable() bool                 { return true }
-func (o *Object) ID() string                      { return o.id }
-func (o *Object) ParentID() string               { return o.dirID }
+func (o *Object) Storable() bool                              { return true }
+func (o *Object) ID() string                                  { return o.id }
+func (o *Object) ParentID() string                            { return o.dirID }
 
 func (o *Object) Hash(_ context.Context, t hash.Type) (string, error) {
 	if t != hash.SHA1 {
@@ -823,16 +899,16 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, _ 
 	}
 	req := api.CreateFileReq{
 		DriveID:         o.fs.driveID,
-		ParentFileID:   directoryID,
-		Name:           o.fs.opt.Enc.FromStandardName(leaf),
-		Type:           "file",
-		CheckNameMode:  "overwrite",
-		Size:           size,
-		ContentHash:    strings.ToLower(sha1sum),
+		ParentFileID:    directoryID,
+		Name:            o.fs.opt.Enc.FromStandardName(leaf),
+		Type:            "file",
+		CheckNameMode:   "overwrite",
+		Size:            size,
+		ContentHash:     strings.ToLower(sha1sum),
 		ContentHashName: "sha1",
-		PartInfoList:   partsForSize(size),
+		PartInfoList:    partsForSize(size),
 	}
-	opts := rest.Opts{Method: http.MethodPost, Path: "/adrive/v1.0/openFile/create"}
+	opts := rest.Opts{Method: http.MethodPost, Path: o.fs.apiPath("/adrive/v1.0/openFile/create", "/adrive/v2/file/createWithFolders")}
 	var created api.CreateFileResp
 	if err := o.fs.doJSON(ctx, &opts, &req, &created); err != nil {
 		return err
@@ -870,7 +946,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, _ 
 			}
 		}
 		comp := api.CompleteReq{DriveID: o.fs.driveID, FileID: created.FileID, UploadID: created.UploadID}
-		compOpts := rest.Opts{Method: http.MethodPost, Path: "/adrive/v1.0/openFile/complete"}
+		compOpts := rest.Opts{Method: http.MethodPost, Path: o.fs.apiPath("/adrive/v1.0/openFile/complete", "/v2/file/complete")}
 		var done api.CompleteResp
 		if err := o.fs.doJSON(ctx, &compOpts, &comp, &done); err != nil {
 			return err

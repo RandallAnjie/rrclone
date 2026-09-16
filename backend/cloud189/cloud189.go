@@ -18,6 +18,7 @@ import (
 	"github.com/rclone/rclone/fs/config"
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/config/configstruct"
+	"github.com/rclone/rclone/fs/config/obscure"
 	"github.com/rclone/rclone/fs/fserrors"
 	"github.com/rclone/rclone/fs/fshttp"
 	"github.com/rclone/rclone/fs/hash"
@@ -40,11 +41,28 @@ func init() {
 		Description: "China Telecom Cloud 189",
 		NewFs:       NewFs,
 		Options: []fs.Option{{
+			Name: "user",
+			Help: `Cloud 189 username (phone number or email).
+
+The easy path: set user and pass. rclone logs in through
+open.e.189.cn and stores the session cookie. Cookie is optional
+when user/pass are set.
+`,
+			Sensitive: true,
+		}, {
+			Name: "pass",
+			Help: `Cloud 189 password.
+
+Used with user. rclone obscures this in the config file.
+`,
+			Sensitive:  true,
+			IsPassword: true,
+		}, {
 			Name: "cookie",
 			Help: `Cloud 189 web cookie string.
 
-Copy the Cookie header from a logged-in session at https://cloud.189.cn
-(DevTools → Network).
+Optional if user and pass are set. Copy the Cookie header from a
+logged-in session at https://cloud.189.cn (DevTools → Network).
 `,
 			Sensitive: true,
 		}, {
@@ -61,6 +79,10 @@ Leave blank to use the account root (-11).
 			Default:  api.DefaultRoot,
 			Advanced: true,
 		}, {
+			Name:     "auth_endpoint",
+			Help:     "Endpoint for Cloud 189 SSO login. Default https://open.e.189.cn.",
+			Advanced: true,
+		}, {
 			Name:     config.ConfigEncoding,
 			Help:     config.ConfigEncodingHelp,
 			Advanced: true,
@@ -75,9 +97,12 @@ Leave blank to use the account root (-11).
 
 // Options defines the configuration of this backend.
 type Options struct {
+	User         string               `config:"user"`
+	Pass         string               `config:"pass"`
 	Cookie       string               `config:"cookie"`
 	RootFolderID string               `config:"root_folder_id"`
 	Endpoint     string               `config:"endpoint"`
+	AuthEndpoint string               `config:"auth_endpoint"`
 	Enc          encoder.MultiEncoder `config:"encoding"`
 }
 
@@ -91,6 +116,7 @@ type Fs struct {
 	dl       *rest.Client
 	pacer    *fs.Pacer
 	dirCache *dircache.DirCache
+	m        configmap.Mapper
 }
 
 // Object describes a Cloud 189 object.
@@ -106,6 +132,16 @@ type Object struct {
 var retryErrorCodes = []int{429, 500, 502, 503, 504}
 
 func parsePath(p string) string { return strings.Trim(p, "/") }
+
+func reveal(s string) string {
+	if s == "" {
+		return ""
+	}
+	if out, err := obscure.Reveal(s); err == nil {
+		return out
+	}
+	return s
+}
 
 func shouldRetry(ctx context.Context, resp *http.Response, err error) (bool, error) {
 	if fserrors.ContextError(ctx, &err) {
@@ -129,11 +165,12 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(opt.Cookie) == "" {
-		return nil, errors.New("cloud189: cookie is required (copy it from cloud.189.cn after login)")
-	}
+	opt.Pass = reveal(opt.Pass)
 	if opt.Endpoint == "" {
 		opt.Endpoint = api.DefaultRoot
+	}
+	if strings.TrimSpace(opt.Cookie) == "" && (strings.TrimSpace(opt.User) == "" || strings.TrimSpace(opt.Pass) == "") {
+		return nil, errors.New("cloud189: set user and pass, or cookie from cloud.189.cn")
 	}
 	root = parsePath(root)
 	client := fshttp.NewClient(ctx)
@@ -145,6 +182,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		name:  name,
 		root:  root,
 		opt:   *opt,
+		m:     m,
 		srv:   rest.NewClient(client).SetRoot(strings.TrimRight(opt.Endpoint, "/")),
 		dl:    rest.NewClient(client),
 		pacer: fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(defaultMinSleep), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
@@ -158,7 +196,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	f.dl.SetHeader("Cookie", opt.Cookie)
 	f.features = (&fs.Features{CanHaveEmptyDirectories: true}).Fill(ctx, f)
 	f.dirCache = dircache.New(root, rootFolderID, f)
-	if _, err := f.capacity(ctx); err != nil {
+	if err := f.ensureSession(ctx); err != nil {
 		return nil, fmt.Errorf("cloud189 login check failed: %w", err)
 	}
 	err = f.dirCache.FindRoot(ctx, false)
@@ -199,13 +237,13 @@ func (f *Fs) capacity(ctx context.Context) (*api.CapacityResp, error) {
 	return &info, nil
 }
 
-func (f *Fs) Name() string                 { return f.name }
-func (f *Fs) Root() string                 { return f.root }
-func (f *Fs) String() string                { return fmt.Sprintf("Cloud 189 root '%s'", f.root) }
-func (f *Fs) Features() *fs.Features        { return f.features }
-func (f *Fs) Precision() time.Duration       { return time.Second }
-func (f *Fs) Hashes() hash.Set               { return hash.Set(hash.None) }
-func (f *Fs) DirCacheFlush()                { f.dirCache.ResetRoot() }
+func (f *Fs) Name() string             { return f.name }
+func (f *Fs) Root() string             { return f.root }
+func (f *Fs) String() string           { return fmt.Sprintf("Cloud 189 root '%s'", f.root) }
+func (f *Fs) Features() *fs.Features   { return f.features }
+func (f *Fs) Precision() time.Duration { return time.Second }
+func (f *Fs) Hashes() hash.Set         { return hash.Set(hash.None) }
+func (f *Fs) DirCacheFlush()           { f.dirCache.ResetRoot() }
 
 func (f *Fs) newObjectWithInfo(ctx context.Context, remote string, info *api.File) (fs.Object, error) {
 	o := &Object{fs: f, remote: remote}
@@ -581,14 +619,14 @@ func (o *Object) readMetaData(ctx context.Context) error {
 	return o.setMetaData(info)
 }
 
-func (o *Object) Fs() fs.Info                              { return o.fs }
-func (o *Object) String() string                               { return o.remote }
-func (o *Object) Remote() string                                { return o.remote }
+func (o *Object) Fs() fs.Info                                 { return o.fs }
+func (o *Object) String() string                              { return o.remote }
+func (o *Object) Remote() string                              { return o.remote }
 func (o *Object) Size() int64                                 { return o.size }
-func (o *Object) ModTime(_ context.Context) time.Time          { return o.modTime }
+func (o *Object) ModTime(_ context.Context) time.Time         { return o.modTime }
 func (o *Object) SetModTime(context.Context, time.Time) error { return fs.ErrorCantSetModTime }
-func (o *Object) Storable() bool                                { return true }
-func (o *Object) ID() string                                    { return o.id }
+func (o *Object) Storable() bool                              { return true }
+func (o *Object) ID() string                                  { return o.id }
 func (o *Object) ParentID() string                            { return o.dirID }
 func (o *Object) Hash(context.Context, hash.Type) (string, error) {
 	return "", hash.ErrUnsupported
@@ -639,9 +677,9 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, _ 
 	opts := rest.Opts{
 		Method:               http.MethodPost,
 		RootURL:              "https://hb02.upload.cloud.189.cn/v1/DCIWebUploadAction",
-		MultipartParams:     url.Values{},
+		MultipartParams:      url.Values{},
 		MultipartContentName: "Filedata",
-		MultipartFileName:   o.fs.opt.Enc.FromStandardName(leaf),
+		MultipartFileName:    o.fs.opt.Enc.FromStandardName(leaf),
 		Body:                 in,
 		ExtraHeaders:         map[string]string{"Cookie": o.fs.opt.Cookie, "User-Agent": defaultUA},
 	}

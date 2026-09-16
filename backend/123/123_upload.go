@@ -230,6 +230,9 @@ func (o *Object) uploadSlices(ctx context.Context, src *uploadSource, created *a
 
 // Update uploads the object
 func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, _ ...fs.OpenOption) error {
+	if o.fs.web {
+		return o.webUpdate(ctx, in, src)
+	}
 	leaf, directoryID, err := o.fs.dirCache.FindPath(ctx, o.remote, true)
 	if err != nil {
 		return err

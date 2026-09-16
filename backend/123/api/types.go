@@ -10,8 +10,16 @@ import (
 const (
 	// DefaultRoot is https://open-api.123pan.com
 	DefaultRoot = "https://open-api.123pan.com"
+	// DefaultWebRoot is the unofficial web API origin.
+	DefaultWebRoot = "https://www.123pan.com"
+	// LoginRoot is the unofficial login API origin.
+	LoginRoot = "https://login.123pan.com/api"
 	// PlatformHeader is required by the open platform.
 	PlatformHeader = "open_platform"
+	// WebPlatformHeader is sent with unofficial web API requests.
+	WebPlatformHeader = "web"
+	// WebAppVersion is sent with unofficial web API requests.
+	WebAppVersion = "3"
 	// DuplicateOverwrite replaces an existing file of the same name on upload.
 	DuplicateOverwrite = 2
 	// TokenExpired is returned when the Bearer token is no longer valid.
@@ -34,9 +42,10 @@ func (b BaseResp) GetCode() int {
 	return b.Code
 }
 
-// Err returns a non-nil error when Code is not 0.
+// Err returns a non-nil error when Code is not a success value.
+// Open Platform uses 0; unofficial web login uses 200.
 func (b BaseResp) Err() error {
-	if b.Code == 0 {
+	if b.Code == 0 || b.Code == 200 {
 		return nil
 	}
 	if b.Message == "" {
@@ -99,14 +108,25 @@ func (f File) Parent() string {
 	return strconv.FormatInt(f.ParentFileID, 10)
 }
 
-// ModTime parses UpdateAt as China Standard Time.
+// ModTime parses UpdateAt as China Standard Time or RFC3339.
 func (f File) ModTime() time.Time {
-	loc := time.FixedZone("CST", 8*3600)
-	t, err := time.ParseInLocation("2006-01-02 15:04:05", f.UpdateAt, loc)
-	if err != nil {
+	if f.UpdateAt == "" {
 		return time.Time{}
 	}
-	return t
+	loc := time.FixedZone("CST", 8*3600)
+	for _, layout := range []string{
+		"2006-01-02 15:04:05",
+		time.RFC3339,
+		time.RFC3339Nano,
+	} {
+		if t, err := time.ParseInLocation(layout, f.UpdateAt, loc); err == nil {
+			return t
+		}
+		if t, err := time.Parse(layout, f.UpdateAt); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // FileListResp is GET /api/v2/file/list
@@ -220,4 +240,84 @@ type SHA1ReuseResp struct {
 		FileID int64 `json:"fileID"`
 		Reuse  bool  `json:"reuse"`
 	} `json:"data"`
+}
+
+// LoginReq is POST /user/sign_in on the unofficial login host.
+type LoginReq struct {
+	Passport string `json:"passport,omitempty"`
+	Mail     string `json:"mail,omitempty"`
+	Password string `json:"password"`
+	Remember bool   `json:"remember,omitempty"`
+	Type     int    `json:"type,omitempty"`
+}
+
+// LoginResp is the unofficial sign-in response. Success is Code 200.
+type LoginResp struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    struct {
+		Token        string `json:"token"`
+		RefreshToken string `json:"refresh_token"`
+		Expire       int64  `json:"expire"`
+	} `json:"data"`
+}
+
+// WebFileListResp is GET /b/api/file/list/new
+type WebFileListResp struct {
+	BaseResp
+	Data struct {
+		Next     string `json:"Next"`
+		Total    int    `json:"Total"`
+		InfoList []File `json:"InfoList"`
+	} `json:"data"`
+}
+
+// WebUploadResp is POST /b/api/file/upload_request
+type WebUploadResp struct {
+	BaseResp
+	Data struct {
+		AccessKeyID     string `json:"AccessKeyId"`
+		Bucket          string `json:"Bucket"`
+		Key             string `json:"Key"`
+		SecretAccessKey string `json:"SecretAccessKey"`
+		SessionToken    string `json:"SessionToken"`
+		FileID          int64  `json:"FileId"`
+		Reuse           bool   `json:"Reuse"`
+		EndPoint        string `json:"EndPoint"`
+		StorageNode     string `json:"StorageNode"`
+		UploadID        string `json:"UploadId"`
+	} `json:"data"`
+}
+
+// WebS3URLs is POST /b/api/file/s3_repare_upload_parts_batch or s3_upload_object/auth
+type WebS3URLs struct {
+	BaseResp
+	Data struct {
+		PreSignedURLs map[string]string `json:"presignedUrls"`
+	} `json:"data"`
+}
+
+// WebMkdirResp is POST /b/api/file/upload_request for a folder.
+type WebMkdirResp struct {
+	BaseResp
+	Data struct {
+		FileID int64 `json:"FileId"`
+	} `json:"data"`
+}
+
+// WebDownloadResp is POST /b/api/file/download_info
+type WebDownloadResp struct {
+	BaseResp
+	Data struct {
+		DownloadURL string `json:"DownloadUrl"`
+		URL         string `json:"downloadUrl"`
+	} `json:"data"`
+}
+
+// DownloadURL returns the unofficial download URL.
+func (d WebDownloadResp) DownloadURL() string {
+	if d.Data.DownloadURL != "" {
+		return d.Data.DownloadURL
+	}
+	return d.Data.URL
 }

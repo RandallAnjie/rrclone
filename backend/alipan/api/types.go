@@ -9,8 +9,14 @@ import (
 const (
 	// DefaultRoot is https://openapi.alipan.com
 	DefaultRoot = "https://openapi.alipan.com"
+	// DefaultWebRoot is the unofficial web API origin.
+	DefaultWebRoot = "https://api.alipan.com"
+	// DefaultTokenURL is the unofficial token endpoint.
+	DefaultTokenURL = "https://auth.alipan.com/v2/account/token"
 	// RootFolder is the account root folder id.
 	RootFolder = "root"
+	// WebAppID is the Aliyun Drive Android app id used to sign web requests.
+	WebAppID = "5dde4e1bdf9e4966b387ba58f4b3fdc3"
 )
 
 // TokenReq is POST /oauth/access_token
@@ -114,13 +120,13 @@ func (f File) DisplayName() string {
 
 // ListReq is POST /adrive/v1.0/openFile/list
 type ListReq struct {
-	DriveID         string `json:"drive_id"`
-	ParentFileID    string `json:"parent_file_id"`
-	Limit           int    `json:"limit"`
-	Marker          string `json:"marker,omitempty"`
-	OrderBy         string `json:"order_by,omitempty"`
-	OrderDirection  string `json:"order_direction,omitempty"`
-	Fields          string `json:"fields,omitempty"`
+	DriveID        string `json:"drive_id"`
+	ParentFileID   string `json:"parent_file_id"`
+	Limit          int    `json:"limit"`
+	Marker         string `json:"marker,omitempty"`
+	OrderBy        string `json:"order_by,omitempty"`
+	OrderDirection string `json:"order_direction,omitempty"`
+	Fields         string `json:"fields,omitempty"`
 }
 
 // ListResp is a paged file list.
@@ -131,11 +137,11 @@ type ListResp struct {
 
 // CreateFolderReq is POST /adrive/v1.0/openFile/createFolder
 type CreateFolderReq struct {
-	DriveID         string `json:"drive_id"`
-	ParentFileID    string `json:"parent_file_id"`
-	Name            string `json:"name"`
-	CheckNameMode   string `json:"check_name_mode"`
-	Type            string `json:"type"`
+	DriveID       string `json:"drive_id"`
+	ParentFileID  string `json:"parent_file_id"`
+	Name          string `json:"name"`
+	CheckNameMode string `json:"check_name_mode"`
+	Type          string `json:"type"`
 }
 
 // CreateFolderResp is a create-folder response.
@@ -146,8 +152,9 @@ type CreateFolderResp struct {
 
 // DownloadReq is POST /adrive/v1.0/openFile/getDownloadUrl
 type DownloadReq struct {
-	DriveID string `json:"drive_id"`
-	FileID  string `json:"file_id"`
+	DriveID   string `json:"drive_id"`
+	FileID    string `json:"file_id"`
+	ExpireSec int    `json:"expire_sec,omitempty"`
 }
 
 // DownloadResp is a download URL response.

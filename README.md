@@ -60,6 +60,39 @@ sudo -v ; curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/mast
 
 Windows 没有 bash 一键脚本，请从 [Releases](https://github.com/RandallAnjie/rrclone/releases) 下载 `rrclone-windows-amd64.zip`。
 
+### 走代理 / GitHub 镜像更新
+
+`curl | sudo bash` 里 **sudo 默认不会带上** `https_proxy`，所以本机 Clash / V2Ray 开了代理，脚本里第二次下 GitHub 还是会失败。二选一：
+
+**本机 HTTP 代理**（把端口换成你的，Clash 常见 `7890`）：
+
+```console
+export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890
+sudo -v
+curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh | sudo -E bash
+```
+
+不想用 `sudo -E` 时，只把代理传给脚本：
+
+```console
+sudo -v
+curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh \
+  | sudo RRCLONE_PROXY=http://127.0.0.1:7890 bash
+```
+
+SOCKS 写成 `socks5://127.0.0.1:7891`。
+
+**GitHub 镜像前缀**（国内更常见；脚本 URL 和 `RRCLONE_GHPROXY` 都要包一层，前缀按你能打开的换成 `ghfast.top` / `ghproxy.net` 等）：
+
+```console
+GH=https://ghfast.top
+sudo -v
+curl -fsSL ${GH}/https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh \
+  | sudo RRCLONE_GHPROXY=${GH} bash
+```
+
+镜像和本机代理可以一起用：`sudo RRCLONE_GHPROXY=${GH} RRCLONE_PROXY=http://127.0.0.1:7890 bash`。
+
 默认配置文件是 `~/.config/rrclone/rrclone.conf`，不是官方的 `~/.config/rclone/rclone.conf`。环境变量优先读 `RRCLONE_*`，没有时回退 `RCLONE_*`。
 
 ## Storage providers

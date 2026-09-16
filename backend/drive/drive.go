@@ -809,6 +809,26 @@ See: https://developers.google.com/workspace/drive/api/guides/limited-expansive-
 			// Don't encode / as it's a valid name character in drive.
 			Default: encoder.EncodeInvalidUtf8,
 		}, {
+			Name: "endpoint",
+			Help: `Custom endpoint for the Google Drive API. Leave blank to use the provider default.
+
+Set the origin that reverse-proxies https://www.googleapis.com (scheme and
+host). rclone requests /drive/v3/ and resumable uploads /upload/drive/v3/
+on that origin.
+
+If OAuth or service-account token refresh is also blocked, set token_url
+(and auth_url for interactive login) to the matching proxies of
+https://oauth2.googleapis.com/token and
+https://accounts.google.com/o/oauth2/auth.`,
+			Advanced: true,
+			Examples: []fs.OptionExample{{
+				Value: "https://www.googleapis.com",
+				Help:  "Google Drive API (default)",
+			}, {
+				Value: "https://googleapis.example.com",
+				Help:  "Reverse proxy for www.googleapis.com",
+			}},
+		}, {
 			Name:     "env_auth",
 			Help:     "Get IAM credentials from runtime (environment variables or instance meta data if no env vars).\n\nOnly applies if service_account_file and service_account_credentials is blank.",
 			Default:  false,
@@ -887,6 +907,7 @@ type Options struct {
 	EnforceExpansiveAccess    bool                 `config:"metadata_enforce_expansive_access"`
 	Enc                       encoder.MultiEncoder `config:"encoding"`
 	EnvAuth                   bool                 `config:"env_auth"`
+	Endpoint                  string               `config:"endpoint"`
 }
 
 // Fs represents a remote drive server
@@ -1604,7 +1625,7 @@ func getClient(ctx context.Context, opt *Options) *http.Client {
 	}
 }
 
-func getServiceAccountClient(ctx context.Context, opt *Options, credentialsData []byte) (*http.Client, error) {
+func getServiceAccountClient(ctx context.Context, opt *Options, credentialsData []byte, tokenURL string) (*http.Client, error) {
 	scopes := driveScopes(opt.Scope)
 	conf, err := google.JWTConfigFromJSON(credentialsData, scopes...)
 	if err != nil {
@@ -1613,8 +1634,23 @@ func getServiceAccountClient(ctx context.Context, opt *Options, credentialsData 
 	if opt.Impersonate != "" {
 		conf.Subject = opt.Impersonate
 	}
+	if tokenURL != "" {
+		conf.TokenURL = tokenURL
+	}
 	ctxWithSpecialClient := oauthutil.Context(ctx, getClient(ctx, opt))
 	return oauth2.NewClient(ctxWithSpecialClient, conf.TokenSource(ctxWithSpecialClient)), nil
+}
+
+func (f *Fs) driveClientOptions() []option.ClientOption {
+	return f.driveClientOptionsFor("v3")
+}
+
+func (f *Fs) driveClientOptionsFor(apiVersion string) []option.ClientOption {
+	opts := []option.ClientOption{option.WithHTTPClient(f.client)}
+	if ep := driveAPIEndpoint(f.opt.Endpoint, apiVersion); ep != "" {
+		opts = append(opts, option.WithEndpoint(ep))
+	}
+	return opts
 }
 
 func createOAuthClient(ctx context.Context, opt *Options, name string, m configmap.Mapper) (*http.Client, error) {
@@ -1630,7 +1666,8 @@ func createOAuthClient(ctx context.Context, opt *Options, name string, m configm
 		opt.ServiceAccountCredentials = string(loadedCreds)
 	}
 	if opt.ServiceAccountCredentials != "" {
-		oAuthClient, err = getServiceAccountClient(ctx, opt, []byte(opt.ServiceAccountCredentials))
+		tokenURL, _ := m.Get(config.ConfigTokenURL)
+		oAuthClient, err = getServiceAccountClient(ctx, opt, []byte(opt.ServiceAccountCredentials), tokenURL)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create oauth client from service account: %w", err)
 		}
@@ -1959,12 +1996,12 @@ func (f *Fs) changeOAuthAccountFile(ctx context.Context, file string) (err error
 		return fmt.Errorf("drive: token validation failed for account file %q: %w", file, tokenErr)
 	}
 	f.client = oAuthClient
-	f.svc, err = drive.NewService(context.Background(), option.WithHTTPClient(f.client))
+	f.svc, err = drive.NewService(context.Background(), f.driveClientOptions()...)
 	if err != nil {
 		return fmt.Errorf("couldn't create Drive client: %w", err)
 	}
 	if f.opt.V2DownloadMinSize >= 0 {
-		f.v2Svc, err = drive_v2.NewService(context.Background(), option.WithHTTPClient(f.client))
+		f.v2Svc, err = drive_v2.NewService(context.Background(), f.driveClientOptionsFor("v2")...)
 		if err != nil {
 			return fmt.Errorf("couldn't create Drive v2 client: %w", err)
 		}
@@ -2093,13 +2130,13 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 
 	// Create a new authorized Drive client.
 	f.client = oAuthClient
-	f.svc, err = drive.NewService(context.Background(), option.WithHTTPClient(f.client))
+	f.svc, err = drive.NewService(context.Background(), f.driveClientOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't create Drive client: %w", err)
 	}
 
 	if f.opt.V2DownloadMinSize >= 0 {
-		f.v2Svc, err = drive_v2.NewService(context.Background(), option.WithHTTPClient(f.client))
+		f.v2Svc, err = drive_v2.NewService(context.Background(), f.driveClientOptionsFor("v2")...)
 		if err != nil {
 			return nil, fmt.Errorf("couldn't create Drive v2 client: %w", err)
 		}
@@ -4095,12 +4132,12 @@ func (f *Fs) changeServiceAccountFile(ctx context.Context, file string) (err err
 		return fmt.Errorf("drive: failed when making oauth client: %w", err)
 	}
 	f.client = oAuthClient
-	f.svc, err = drive.NewService(context.Background(), option.WithHTTPClient(f.client))
+	f.svc, err = drive.NewService(context.Background(), f.driveClientOptions()...)
 	if err != nil {
 		return fmt.Errorf("couldn't create Drive client: %w", err)
 	}
 	if f.opt.V2DownloadMinSize >= 0 {
-		f.v2Svc, err = drive_v2.NewService(context.Background(), option.WithHTTPClient(f.client))
+		f.v2Svc, err = drive_v2.NewService(context.Background(), f.driveClientOptionsFor("v2")...)
 		if err != nil {
 			return fmt.Errorf("couldn't create Drive v2 client: %w", err)
 		}

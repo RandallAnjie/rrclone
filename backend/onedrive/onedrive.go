@@ -170,6 +170,26 @@ Example: https://your-tenant.sharepoint.com/_api`,
 			Default:  "",
 			Advanced: true,
 		}, {
+			Name: "endpoint",
+			Help: `Custom endpoint for the Microsoft Graph API. Leave blank to use the national cloud default.
+
+This should reverse-proxy https://graph.microsoft.com (or the regional
+Graph host selected by region). rclone appends /v1.0 and /beta as needed.
+
+For Azure operated by Vnet Group in China, prefer region "cn" instead
+of a reverse proxy. If OAuth is also blocked, set auth_url and
+token_url to the matching login host.
+
+tenant_url still takes precedence when it is set.`,
+			Advanced: true,
+			Examples: []fs.OptionExample{{
+				Value: "https://graph.microsoft.com",
+				Help:  "Microsoft Graph global (default)",
+			}, {
+				Value: "https://graph.example.com",
+				Help:  "Reverse proxy for graph.microsoft.com",
+			}},
+		}, {
 			Name: "chunk_size",
 			Help: `Chunk size to upload files with - must be multiple of 320k (327,680 bytes).
 
@@ -493,11 +513,30 @@ isn't always desirable to set the permissions from the metadata.
 	})
 }
 
+// graphOriginFromEndpoint returns the Microsoft Graph origin for a region or custom endpoint.
+func graphOriginFromEndpoint(endpoint, region string) string {
+	if endpoint != "" {
+		origin := rest.CanonicalRoot(endpoint)
+		origin = strings.TrimSuffix(origin, "/beta")
+		origin = strings.TrimSuffix(origin, "/v1.0")
+		return origin
+	}
+	origin := graphAPIEndpoint[region]
+	if origin == "" {
+		origin = graphAPIEndpoint[regionGlobal]
+	}
+	return origin
+}
+
+func (opt *Options) graphOrigin() string {
+	return graphOriginFromEndpoint(opt.Endpoint, opt.Region)
+}
+
 // Get the region and graphURL from the config
 func getRegionURL(m configmap.Mapper) (region, graphURL string) {
 	region, _ = m.Get("region")
-
-	graphURL = graphAPIEndpoint[region] + "/v1.0"
+	endpoint, _ := m.Get("endpoint")
+	graphURL = graphOriginFromEndpoint(endpoint, region) + "/v1.0"
 
 	// Check if tenant_url is provided for non-admin mode
 	tenantURL, _ := m.Get("tenant_url")
@@ -821,6 +860,7 @@ type Options struct {
 	Delta                   bool                 `config:"delta"`
 	Enc                     encoder.MultiEncoder `config:"encoding"`
 	MetadataPermissions     rwChoice             `config:"metadata_permissions"`
+	Endpoint                string               `config:"endpoint"`
 }
 
 // Fs represents a remote OneDrive
@@ -1105,7 +1145,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		return nil, errors.New("unable to get drive_id and drive_type - if you are upgrading from older versions of rclone, please run `rclone config` and re-configure this backend")
 	}
 
-	rootURL := graphAPIEndpoint[opt.Region] + "/v1.0" + "/drives/" + opt.DriveID
+	rootURL := opt.graphOrigin() + "/v1.0" + "/drives/" + opt.DriveID
 
 	if opt.TenantURL != "" {
 		rootURL = opt.TenantURL + "/v2.0" + "/drives/" + opt.DriveID
@@ -2462,7 +2502,7 @@ func (o *Object) openContentStream(ctx context.Context, options ...fs.OpenOption
 	}
 	opts := rest.Opts{
 		Method:  "GET",
-		RootURL: graphAPIEndpoint[o.fs.opt.Region] + "/beta/drives/" + drive,
+		RootURL: o.fs.opt.graphOrigin() + "/beta/drives/" + drive,
 		Path:    "/items/" + id + "/contentStream",
 		Options: options,
 		ExtraHeaders: map[string]string{
@@ -2490,7 +2530,7 @@ func (o *Object) openContentPrefer(ctx context.Context, options ...fs.OpenOption
 	}
 	opts := rest.Opts{
 		Method:  "GET",
-		RootURL: graphAPIEndpoint[o.fs.opt.Region] + "/beta/drives/" + drive,
+		RootURL: o.fs.opt.graphOrigin() + "/beta/drives/" + drive,
 		Path:    "/items/" + id + "/content",
 		Options: options,
 		ExtraHeaders: map[string]string{
@@ -2913,7 +2953,7 @@ func (f *Fs) parseNormalizedID(ID string) (string, string, string) {
 	if f.opt.TenantURL != "" {
 		rootURL = f.opt.TenantURL + "/v2.0/drives"
 	} else {
-		rootURL = graphAPIEndpoint[f.opt.Region] + "/v1.0/drives"
+		rootURL = f.opt.graphOrigin() + "/v1.0/drives"
 	}
 
 	if strings.Contains(ID, "#") {
@@ -3114,7 +3154,7 @@ func (f *Fs) buildDriveDeltaOpts(token string) rest.Opts {
 	if f.opt.TenantURL != "" {
 		rootURL = f.opt.TenantURL + "/v2.0/drives"
 	} else {
-		rootURL = graphAPIEndpoint[f.opt.Region] + "/v1.0/drives"
+		rootURL = f.opt.graphOrigin() + "/v1.0/drives"
 	}
 
 	return rest.Opts{

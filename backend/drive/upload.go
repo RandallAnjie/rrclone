@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/fserrors"
@@ -29,8 +30,99 @@ import (
 
 const (
 	// statusResumeIncomplete is the code returned by the Google uploader when the transfer is not yet complete.
-	statusResumeIncomplete = 308
+	statusResumeIncomplete    = 308
+	defaultResumableUploadURL = "https://www.googleapis.com/upload/drive/v3/files"
 )
+
+func isOfficialGoogleAPIHost(host string) bool {
+	return host == "www.googleapis.com" || host == "www.mtls.googleapis.com"
+}
+
+// driveAPIEndpoint returns an endpoint for option.WithEndpoint.
+//
+// The Google API client uses a full URL as BasePath verbatim, so an origin-only
+// value such as https://proxy.example.com would request /about instead of
+// /drive/v3/about. When the configured path does not already include /drive/v3
+// or /drive/v2, /drive/{apiVersion}/ is appended.
+func driveAPIEndpoint(endpoint, apiVersion string) string {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return ""
+	}
+	if apiVersion == "" {
+		apiVersion = "v3"
+	}
+	raw := endpoint
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return endpoint
+	}
+	path := strings.TrimSuffix(u.Path, "/")
+	if !strings.HasSuffix(path, "/drive/v3") && !strings.HasSuffix(path, "/drive/v2") {
+		path += "/drive/" + apiVersion
+	}
+	u.Path = path + "/"
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
+}
+
+func driveAPIPathPrefix(basePath string) string {
+	prefix := strings.TrimSuffix(basePath, "/")
+	prefix = strings.TrimSuffix(prefix, "/drive/v3")
+	prefix = strings.TrimSuffix(prefix, "/drive/v2")
+	if prefix == "/" {
+		return ""
+	}
+	return prefix
+}
+
+// driveUploadURL builds the resumable upload URL for a Drive API BasePath.
+func driveUploadURL(basePath string) string {
+	if basePath == "" {
+		return defaultResumableUploadURL
+	}
+	u, err := url.Parse(basePath)
+	if err != nil || u.Host == "" {
+		return defaultResumableUploadURL
+	}
+	u.Path = driveAPIPathPrefix(u.Path) + "/upload/drive/v3/files"
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
+}
+
+func (f *Fs) resumableUploadURL() string {
+	if f.svc == nil {
+		return defaultResumableUploadURL
+	}
+	return driveUploadURL(f.svc.BasePath)
+}
+
+// rewriteGoogleAPILocation rewrites an official Google API URL onto a custom endpoint.
+func rewriteGoogleAPILocation(loc, basePath string) string {
+	if loc == "" || basePath == "" {
+		return loc
+	}
+	locURL, err := url.Parse(loc)
+	if err != nil || !isOfficialGoogleAPIHost(locURL.Host) {
+		return loc
+	}
+	base, err := url.Parse(basePath)
+	if err != nil || base.Host == "" || isOfficialGoogleAPIHost(base.Host) {
+		return loc
+	}
+	prefix := driveAPIPathPrefix(base.Path)
+	locURL.Scheme = base.Scheme
+	locURL.Host = base.Host
+	if prefix != "" && !strings.HasPrefix(locURL.Path, prefix+"/") && locURL.Path != prefix {
+		locURL.Path = prefix + locURL.Path
+	}
+	return locURL.String()
+}
 
 // resumableUpload is used by the generated APIs to provide resumable uploads.
 // It is not used by developers directly.
@@ -60,7 +152,7 @@ func (f *Fs) Upload(ctx context.Context, in io.Reader, size int64, contentType, 
 	if f.opt.KeepRevisionForever {
 		params.Set("keepRevisionForever", "true")
 	}
-	urls := "https://www.googleapis.com/upload/drive/v3/files"
+	urls := f.resumableUploadURL()
 	method := "POST"
 	if fileID != "" {
 		params.Set("setModifiedDate", "true")
@@ -100,6 +192,9 @@ func (f *Fs) Upload(ctx context.Context, in io.Reader, size int64, contentType, 
 		return nil, err
 	}
 	loc := res.Header.Get("Location")
+	if f.svc != nil {
+		loc = rewriteGoogleAPILocation(loc, f.svc.BasePath)
+	}
 	rx := &resumableUpload{
 		f:             f,
 		remote:        remote,

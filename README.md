@@ -20,49 +20,21 @@
 
 Rclone *("rsync for cloud storage")* 是一个用于在各种云存储之间同步文件和目录的命令行工具。
 
+**rrclone** 是本仓库相对官方 rclone 的增强分支。和原版比改了什么、有哪些后端和特性、Google Drive 要换哪三个 URL，见落地页：
+
+**[docs/content/rrclone.md](docs/content/rrclone.md)**
+
 ## 这个分支相比原版 rclone 更新了什么
 
-这个仓库基于上游 rclone 持续同步，额外补了一组更适合 Google Drive 大量上传、挂载和多账号轮换场景的增强能力。
+详细对照表和配置示例在落地页。摘要：
 
-当前这个分支相对原版 rclone，主要增加了这些内容：
+- **自定义 API**：Drive / Dropbox / Photos / Box / OneDrive 可把官方 API 主机换成反代。Drive 要换三个地址（授权、token、API）
+- **115 网盘**：浏览器 cookie + web API
+- **Google Drive 多 OAuth 账号轮换**：`--drive-oauth-account-files`
+- **rclone 状态看板**：独立的 `dashboard/` Next.js 应用
+- **一键安装**、默认配置 `~/.config/rrclone/rrclone.conf`
 
-- **Google Drive 多 OAuth 账号轮换**
-  - 新增 `--drive-oauth-account-files`
-  - 一个 Drive remote 可以在多个普通 Google OAuth 账号之间自动切换
-  - 支持直接传 JSON 文件、目录、glob 模式
-
-- **支持结构化账号文件**
-  - 每个账号文件除了 `token`，还可以独立保存 `client_id` 和 `client_secret`
-  - 适合每个 Google 账号对应不同 OAuth App / Project 的场景
-  - 切换账号时会原子性切换整套凭证
-
-- **轮换账号的 token 自动回写**
-  - 某个账号刷新出新 token 后，会自动写回它自己的账号文件
-  - 同时兼容旧格式 raw token 文件和新的结构化账号文件
-
-- **更稳的 token 刷新行为**
-  - 对缺失 `expiry` 或 `expiry` 为零值的 token 文件做兼容处理
-  - 需要时强制 refresh，避免一直复用已经失效的 access token
-
-- **更多 Drive 错误会触发账号轮换**
-  - 除了 quota / rate limit 相关错误
-  - `authError` 现在也会触发 OAuth 账号切换
-
-- **并发 403 场景下串行执行 OAuth 轮换**
-  - 避免多个并发 worker 同时触发切号
-  - 避免 mount / upload 高并发时把整个候选账号池瞬间一起打进 cooldown
-
-- **更清晰的 Drive 限流日志**
-  - `403 userRateLimitExceeded` 以及相关 quota / rate-limit 错误会输出更明确的 `INFO` 日志
-  - 日志里会带上当前账号、正在尝试的候选账号、切换成功后的账号，以及所有账号都在 cooldown 时的摘要信息
-
-这些增强能力的详细说明，可以看 Google Drive 文档里的 **“OAuth account rotation”** 章节。
-
-- **rclone 状态看板**
-  - 新增独立的 `dashboard/` Next.js 应用，用来看本机 rclone RC 的传输、远程、任务和挂载
-  - 不改官方命令注册，所以上游 rclone 更新仍然可以直接 merge
-  - 主机页已经按多机器预留，每台机器对应一个 RC 地址
-  - 启动方式见 [dashboard/README.md](dashboard/README.md)
+Google Drive 多账号轮换的细节仍在 Drive 文档的 **“OAuth account rotation”** 章节。看板启动方式见 [dashboard/README.md](dashboard/README.md)。
 
 ## 安装（从官方 rclone 一键切到 rrclone）
 

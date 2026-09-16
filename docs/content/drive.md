@@ -613,6 +613,41 @@ Drive, the size of all files in the Trash and the space used by other
 Google services such as Gmail. This command does not take any path
 arguments.
 
+### Custom API endpoint
+
+Google Drive uses **three** official hosts. If they are blocked, replace
+all three; changing only `client_id` is not enough.
+
+| What | Official URL | Config / flag |
+| --- | --- | --- |
+| Browser OAuth | `https://accounts.google.com/o/oauth2/auth` | `auth_url` / `--drive-auth-url` |
+| Token issue / refresh (also service-account JWT) | `https://oauth2.googleapis.com/token` | `token_url` / `--drive-token-url` |
+| Drive JSON API and resumable upload | `https://www.googleapis.com` (`/drive/v3/` and `/upload/drive/v3/`) | `endpoint` / `--drive-endpoint` |
+
+Set `endpoint` to the origin (`https://googleapis.example.com`). rclone
+requests `/drive/v3/` and `/upload/drive/v3/` on that host. If Google
+still returns a `Location` on `www.googleapis.com`, rclone rewrites it
+onto `endpoint`.
+
+Interactive login needs all three. Service accounts skip the browser
+host and need `token_url` plus `endpoint`.
+
+A longer fork overview, including Dropbox / Box / OneDrive, is on
+the [rrclone](/rrclone/) page.
+
+Example:
+
+```ini
+[gdrive]
+type = drive
+client_id = YOUR_CLIENT_ID
+client_secret = YOUR_CLIENT_SECRET
+token = {"access_token":"..."}
+auth_url = https://accounts.example.com/o/oauth2/auth
+token_url = https://oauth2.example.com/token
+endpoint = https://googleapis.example.com
+```
+
 ### Import/Export of google documents
 
 Google documents can be exported from and uploaded to Google Drive.

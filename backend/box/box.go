@@ -63,6 +63,35 @@ const (
 	tokenURL                    = "https://api.box.com/oauth2/token"
 )
 
+func boxAPIRoot(endpoint string) string {
+	if endpoint == "" {
+		return rootURL
+	}
+	root := rest.CanonicalRoot(endpoint)
+	if strings.HasSuffix(root, "/2.0") {
+		return root
+	}
+	return root + "/2.0"
+}
+
+func boxUploadRoot(endpoint string) string {
+	if endpoint == "" {
+		return uploadURL
+	}
+	root := rest.CanonicalRoot(endpoint)
+	if strings.HasSuffix(root, "/2.0") {
+		return root
+	}
+	return root + "/api/2.0"
+}
+
+func (f *Fs) uploadAPI() string {
+	if f.uploadRoot != "" {
+		return f.uploadRoot
+	}
+	return uploadURL
+}
+
 // Globals
 var (
 	// Description of how to auth for this app
@@ -169,6 +198,38 @@ See: https://developer.box.com/guides/authentication/jwt/as-user/
 `,
 			Advanced:  true,
 			Sensitive: true,
+		}, {
+			Name: "endpoint",
+			Help: `Custom endpoint for the Box API. Leave blank to use the provider default.
+
+This should reverse-proxy https://api.box.com, including the /2.0 path
+prefix. Uploads use upload_endpoint (https://upload.box.com/api/2.0).
+
+If OAuth is also blocked, set auth_url and token_url to the matching
+proxies of https://app.box.com/api/oauth2/authorize and
+https://app.box.com/api/oauth2/token.`,
+			Advanced: true,
+			Examples: []fs.OptionExample{{
+				Value: "https://api.box.com/2.0",
+				Help:  "Box API (default)",
+			}, {
+				Value: "https://api.box.example.com",
+				Help:  "Reverse proxy for api.box.com",
+			}},
+		}, {
+			Name: "upload_endpoint",
+			Help: `Custom endpoint for the Box upload API. Leave blank to use the provider default.
+
+This should reverse-proxy https://upload.box.com, including the /api/2.0
+path prefix.`,
+			Advanced: true,
+			Examples: []fs.OptionExample{{
+				Value: "https://upload.box.com/api/2.0",
+				Help:  "Box upload API (default)",
+			}, {
+				Value: "https://upload.box.example.com",
+				Help:  "Reverse proxy for upload.box.com",
+			}},
 		}, {
 			Name:     config.ConfigEncoding,
 			Help:     config.ConfigEncodingHelp,
@@ -292,14 +353,16 @@ func getDecryptedPrivateKey(boxConfig *api.ConfigJSON) (key *rsa.PrivateKey, err
 
 // Options defines the configuration for this backend
 type Options struct {
-	UploadCutoff  fs.SizeSuffix        `config:"upload_cutoff"`
-	CommitRetries int                  `config:"commit_retries"`
-	Enc           encoder.MultiEncoder `config:"encoding"`
-	RootFolderID  string               `config:"root_folder_id"`
-	AccessToken   string               `config:"access_token"`
-	ListChunk     int                  `config:"list_chunk"`
-	OwnedBy       string               `config:"owned_by"`
-	Impersonate   string               `config:"impersonate"`
+	UploadCutoff   fs.SizeSuffix        `config:"upload_cutoff"`
+	CommitRetries  int                  `config:"commit_retries"`
+	Enc            encoder.MultiEncoder `config:"encoding"`
+	RootFolderID   string               `config:"root_folder_id"`
+	AccessToken    string               `config:"access_token"`
+	ListChunk      int                  `config:"list_chunk"`
+	OwnedBy        string               `config:"owned_by"`
+	Impersonate    string               `config:"impersonate"`
+	Endpoint       string               `config:"endpoint"`
+	UploadEndpoint string               `config:"upload_endpoint"`
 }
 
 // ItemMeta defines metadata we cache for each Item ID
@@ -322,6 +385,7 @@ type Fs struct {
 	uploadToken     *pacer.TokenDispenser // control concurrency
 	itemMetaCacheMu *sync.Mutex           // protects itemMetaCache
 	itemMetaCache   map[string]ItemMeta   // map of Item ID to selected metadata
+	uploadRoot      string                // Box upload API root
 }
 
 // Object describes a box object
@@ -482,11 +546,12 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		name:            name,
 		root:            root,
 		opt:             *opt,
-		srv:             rest.NewClient(client).SetRoot(rootURL),
+		srv:             rest.NewClient(client).SetRoot(boxAPIRoot(opt.Endpoint)),
 		pacer:           fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(minSleep), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
 		uploadToken:     pacer.NewTokenDispenser(ci.Transfers),
 		itemMetaCacheMu: new(sync.Mutex),
 		itemMetaCache:   make(map[string]ItemMeta),
+		uploadRoot:      boxUploadRoot(opt.UploadEndpoint),
 	}
 	f.features = (&fs.Features{
 		CaseInsensitive:         true,
@@ -1711,7 +1776,7 @@ func (o *Object) upload(ctx context.Context, in io.Reader, leaf, directoryID str
 		MultipartMetadataName: "attributes",
 		MultipartContentName:  "contents",
 		MultipartFileName:     upload.Name,
-		RootURL:               uploadURL,
+		RootURL:               o.fs.uploadAPI(),
 		Options:               options,
 	}
 	// If object has an ID then it is existing so create a new version

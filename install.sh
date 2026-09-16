@@ -10,6 +10,17 @@
 # Install as rrclone only (do not replace /usr/bin/rclone):
 #   ... | sudo bash -s -- --no-replace
 #
+# Local HTTP/SOCKS proxy (sudo drops env vars; pass them explicitly or use -E):
+#   export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890
+#   sudo -v ; curl -fsSL .../install.sh | sudo -E bash
+#   # or without -E:
+#   curl -fsSL .../install.sh | sudo RRCLONE_PROXY=http://127.0.0.1:7890 bash
+#
+# GitHub mirror prefix (common in China; wrap BOTH the script URL and the env):
+#   GH=https://ghfast.top
+#   curl -fsSL ${GH}/https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh \
+#     | sudo RRCLONE_GHPROXY=${GH} bash
+#
 # Exit codes:
 #   0 - success
 #   1 - bad args / unexpected error
@@ -21,8 +32,37 @@
 set -euo pipefail
 
 REPO="${RRCLONE_REPO:-RandallAnjie/rrclone}"
-RELEASE_BASE="${RRCLONE_RELEASE_BASE:-https://github.com/${REPO}/releases}"
-RAW_BASE="${RRCLONE_RAW_BASE:-https://raw.githubusercontent.com/${REPO}/master}"
+
+# apply_ghproxy prefixes a GitHub HTTPS URL with RRCLONE_GHPROXY.
+# Example: RRCLONE_GHPROXY=https://ghfast.top turns
+#   https://github.com/foo/bar
+# into
+#   https://ghfast.top/https://github.com/foo/bar
+apply_ghproxy() {
+  local url="$1"
+  local proxy="${RRCLONE_GHPROXY:-}"
+  if [ -z "$proxy" ]; then
+    printf '%s' "$url"
+    return 0
+  fi
+  proxy="${proxy%/}"
+  case "$url" in
+    "${proxy}"/*) printf '%s' "$url" ;;
+    *) printf '%s/%s' "$proxy" "$url" ;;
+  esac
+}
+
+RELEASE_BASE="${RRCLONE_RELEASE_BASE:-$(apply_ghproxy "https://github.com/${REPO}/releases")}"
+RAW_BASE="${RRCLONE_RAW_BASE:-$(apply_ghproxy "https://raw.githubusercontent.com/${REPO}/master")}"
+
+# curl_get honors RRCLONE_PROXY; otherwise curl uses https_proxy/HTTPS_PROXY/ALL_PROXY.
+curl_get() {
+  if [ -n "${RRCLONE_PROXY:-}" ]; then
+    curl -fsSL --proxy "$RRCLONE_PROXY" "$@"
+  else
+    curl -fsSL "$@"
+  fi
+}
 
 unzip_tools_list=('unzip' '7z' 'busybox')
 
@@ -50,10 +90,15 @@ Options:
 
 Environment:
   RRCLONE_REPO           GitHub repo (default: RandallAnjie/rrclone)
-  RRCLONE_RELEASE_BASE   Release download base URL
+  RRCLONE_GHPROXY        GitHub mirror prefix, e.g. https://ghfast.top
+  RRCLONE_PROXY         HTTP/SOCKS proxy for curl/git (sudo drops https_proxy)
+  RRCLONE_RELEASE_BASE   Release download base URL (overrides GHPROXY for zips)
   RRCLONE_BIN_DIR        Binary install dir (default: /usr/bin, or /usr/local/bin on macOS)
   RRCLONE_MIGRATE_FROM   Explicit path to an official rclone.conf to copy
   RRCLONE_SOURCE_DIR     Local source tree for Go fallback (skips git clone)
+
+  https_proxy / HTTPS_PROXY / ALL_PROXY are used by curl when passed through
+  sudo (-E, or VAR=value sudo). sudo bash alone does not keep them.
 EOF
   exit 1
 }
@@ -365,7 +410,14 @@ rrclone_install_main() {
   version_url="${RELEASE_BASE}/latest/download/version.txt"
   download_link="${RELEASE_BASE}/latest/download/${asset}"
 
-  if current_version=$(curl -fsSL "$version_url" 2>/dev/null); then
+  if [ -n "${RRCLONE_GHPROXY:-}" ]; then
+    log "Using GitHub mirror ${RRCLONE_GHPROXY}"
+  fi
+  if [ -n "${RRCLONE_PROXY:-}" ]; then
+    log "Using proxy ${RRCLONE_PROXY}"
+  fi
+
+  if current_version=$(curl_get "$version_url" 2>/dev/null); then
     current_version=$(printf '%s' "$current_version" | tr -d '\r' | head -n 1)
   else
     current_version=""
@@ -376,7 +428,7 @@ rrclone_install_main() {
     exit 3
   fi
 
-  if curl -fsSL -o "$asset" "$download_link"; then
+  if curl_get -o "$asset" "$download_link"; then
     download_ok=1
   else
     printf '\nCould not download %s\n' "$download_link"
@@ -386,7 +438,7 @@ rrclone_install_main() {
   if [ "$download_ok" -eq 1 ]; then
     extract_zip "$asset"
   else
-    local src_dir=""
+    local src_dir="" src_url=""
     if src_dir=$(detect_source_dir); then
       if ! build_from_source "$src_dir"; then
         echo "Go build from ${src_dir} failed." 1>&2
@@ -394,7 +446,12 @@ rrclone_install_main() {
       fi
     elif command -v go >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
       log "Falling back to git clone + go build..."
-      git clone --depth 1 "https://github.com/${REPO}.git" "${tmp_dir}/src"
+      src_url=$(apply_ghproxy "https://github.com/${REPO}.git")
+      if [ -n "${RRCLONE_PROXY:-}" ]; then
+        git -c "http.proxy=${RRCLONE_PROXY}" -c "https.proxy=${RRCLONE_PROXY}" clone --depth 1 "$src_url" "${tmp_dir}/src"
+      else
+        git clone --depth 1 "$src_url" "${tmp_dir}/src"
+      fi
       if ! build_from_source "${tmp_dir}/src"; then
         echo "Go build failed." 1>&2
         exit 5

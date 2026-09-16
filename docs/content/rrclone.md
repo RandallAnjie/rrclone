@@ -180,6 +180,25 @@ sudo -v ; curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/mast
 sudo -v ; curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh | sudo bash -s -- --no-replace
 ```
 
+### 走代理更新
+
+`sudo bash` 不会继承当前 shell 的 `https_proxy`。本机代理用 `-E` 或 `RRCLONE_PROXY`；国内 GitHub 拉不下来时用镜像前缀（脚本地址也要包一层）：
+
+```console
+# 本机 HTTP 代理（Clash 常见 7890）
+export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890
+curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh | sudo -E bash
+
+# 或只把代理传给脚本
+curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh \
+  | sudo RRCLONE_PROXY=http://127.0.0.1:7890 bash
+
+# GitHub 镜像（把 ghfast.top 换成你能用的前缀）
+GH=https://ghfast.top
+curl -fsSL ${GH}/https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh \
+  | sudo RRCLONE_GHPROXY=${GH} bash
+```
+
 Windows 从 [Releases](https://github.com/RandallAnjie/rrclone/releases) 下载 zip。
 
 ## 看板

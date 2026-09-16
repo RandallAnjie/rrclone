@@ -14,6 +14,21 @@ bash -n "$INSTALL" || fail "bash -n install.sh"
 # shellcheck disable=SC1090
 RRCLONE_INSTALL_SOURCED=1 source "$INSTALL"
 
+# --- unit: apply_ghproxy -----------------------------------------------------
+unset RRCLONE_GHPROXY || true
+[ "$(apply_ghproxy 'https://github.com/RandallAnjie/rrclone/releases')" = "https://github.com/RandallAnjie/rrclone/releases" ] \
+  || fail "apply_ghproxy without prefix"
+RRCLONE_GHPROXY=https://ghfast.top
+[ "$(apply_ghproxy 'https://github.com/RandallAnjie/rrclone/releases')" = "https://ghfast.top/https://github.com/RandallAnjie/rrclone/releases" ] \
+  || fail "apply_ghproxy prefix"
+[ "$(apply_ghproxy 'https://ghfast.top/https://github.com/x')" = "https://ghfast.top/https://github.com/x" ] \
+  || fail "apply_ghproxy double prefix"
+RRCLONE_GHPROXY=https://ghfast.top/
+[ "$(apply_ghproxy 'https://raw.githubusercontent.com/RandallAnjie/rrclone/master')" = "https://ghfast.top/https://raw.githubusercontent.com/RandallAnjie/rrclone/master" ] \
+  || fail "apply_ghproxy trailing slash"
+unset RRCLONE_GHPROXY
+pass "apply_ghproxy prefixes GitHub URLs once"
+
 # --- unit: invoking_user_home / migrate_config --------------------------------
 unit_dir=$(mktemp -d)
 trap 'rm -rf "$unit_dir"' EXIT

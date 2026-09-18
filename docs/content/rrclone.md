@@ -83,7 +83,7 @@ rclone link onedrive:report.pdf
 rclone link s3:bucket/key.bin
 ```
 
-Google Drive 默认是 **A 机签名、B 机下载**：不把文件改成「知道链接的任何人」，只签发大约 1 小时有效的 API 下载地址。B 机直接 wget/curl 这条 URL。Token 和 rclone 账号权限相同，当密钥看。配了 `endpoint` 时 URL 走反代。
+Google Drive 默认是 **A 机签名、B 机下载**：不把文件改成「知道链接的任何人」，只签发大约 1 小时有效的 API 下载地址。配了 `endpoint` 时 URL 走反代。Token 和 rclone 账号权限相同，当密钥看。Google 经常把 query 里的 `access_token` 拦成反爬 403，B 机改用 `Authorization: Bearer`，或让反代把 query token 转成这个头再回源。
 
 | 后端 | `rclone link` | 是不是直链 | 说明 |
 | --- | --- | --- | --- |

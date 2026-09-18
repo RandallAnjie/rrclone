@@ -2068,6 +2068,22 @@ string:
 - Google may redirect large files to `*.googleusercontent.com`. If B
   cannot reach that host, the reverse proxy should follow or rewrite
   the redirect.
+- Putting `access_token` in the query is the only way to make a single
+  wget URL, but Google often answers those with an HTML 403
+  ("Sorry... automated queries"), including through a reverse proxy.
+  Two workarounds:
+
+  1. Machine B downloads with a header instead of the query token:
+
+     ```console
+     curl -L -H "Authorization: Bearer ACCESS_TOKEN" \
+       "https://ENDPOINT/drive/v3/files/FILE_ID?alt=media&supportsAllDrives=true"
+     ```
+
+  2. On the reverse proxy, copy `access_token` into
+     `Authorization: Bearer …` and strip it from the query before
+     forwarding to `www.googleapis.com`. Then B can wget the URL
+     rclone printed.
 
 To restore the old "anyone with the link" share, set
 `link_share = true` (or `--drive-link-share`). That changes the ACL and

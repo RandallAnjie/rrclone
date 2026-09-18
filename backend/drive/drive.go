@@ -3870,7 +3870,9 @@ func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (fs.Object,
 // This does not change sharing permissions. The URL includes the current
 // OAuth access token (typically valid about an hour) so another process can
 // download with wget or curl. The configured endpoint is used so a reverse
-// proxy can serve the bytes.
+// proxy can serve the bytes. Google often rejects access_token in the query
+// with an automated-queries HTML 403; sending the same token as
+// Authorization: Bearer, or having the proxy do that rewrite, works.
 //
 // Folders and native Google Docs have no binary download URL.
 // With link_share set, this instead creates an "anyone with the link"

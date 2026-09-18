@@ -43,6 +43,8 @@ rrclone 是 [rclone](https://rclone.org) 的增强分支。命令、后端和官
 
 - **自定义 API**：官方域名不通时，把请求打到你自己的反代，见下面 [URL 怎么换](#自定义-apiurl-怎么换)
 - **115 Drive**：浏览器 cookie 登录，列表 / 上传 / 下载 / 秒传，见 [115](/115/)
+- **阿里云 OSS / 火山 TOS**：独立 `oss`、`tos` 后端（S3 兼容，不用在 s3 的超长 provider 列表里找）
+- **百度网盘**：浏览器 cookie（BDUSS/STOKEN）或开放平台 token，见 [baidu](/baidu/)
 - **Drive 多账号**：多个 OAuth token 文件轮换，适合大量上传和挂载，见 [Drive OAuth account rotation](/drive/#oauth-account-rotation)
 - **看板**：传输、远程、任务、挂载、多主机 RC 地址
 
@@ -55,6 +57,9 @@ rrclone 是 [rclone](https://rclone.org) 的增强分支。命令、后端和官
 | 后端 | 说明 |
 | --- | --- |
 | [115 Drive](/115/) | 115 网盘，cookie 认证，web API |
+| [Alibaba OSS](/oss/) | 阿里云对象存储，S3 兼容，`rclone config` 里选 `oss` |
+| [Volcengine TOS](/tos/) | 火山引擎对象存储，S3 兼容，`rclone config` 里选 `tos` |
+| [Baidu Netdisk](/baidu/) | 百度网盘，cookie 或开放平台 token |
 
 下面这些后端可以把**官方 API 主机**换成反代（空着就是官方地址）：
 
@@ -68,7 +73,7 @@ rrclone 是 [rclone](https://rclone.org) 的增强分支。命令、后端和官
 | OneDrive | `endpoint`，或国内世纪互联用 `region = cn` | Graph；OAuth 另有 `auth_url` / `token_url` |
 | pCloud | `hostname` | 原版就有欧洲站 `eapi.pcloud.com` |
 
-S3 兼容存储本来就用 `endpoint`（Cloudflare R2、MinIO、阿里云 OSS 等），不用再改。
+S3 兼容存储本来就用 `endpoint`（Cloudflare R2、MinIO、阿里云 OSS、火山 TOS 等），不用再改。`oss` / `tos` 只是把 provider 写好，方便在 `rclone config` 里选。
 
 ## 自定义 API：URL 怎么换
 

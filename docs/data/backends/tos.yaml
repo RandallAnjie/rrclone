@@ -1,0 +1,28 @@
+backend: tos
+name: Volcengine TOS
+tier: Tier 1
+maintainers: External
+features_score: 6
+integration_tests: Unknown
+data_integrity: Hash
+performance: High
+adoption: Some use
+docs: Full
+security: High
+virtual: false
+remote: 'TestTOS:'
+features:
+- BucketBased
+- BucketBasedRootOK
+- Copy
+- ListP
+- ListR
+- OpenChunkWriter
+- Purge
+- PutStream
+- PublicLink
+- ReadMimeType
+- WriteMimeType
+hashes:
+- md5
+precision: 1

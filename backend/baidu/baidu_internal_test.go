@@ -114,3 +114,11 @@ func TestHashBlocksKnown(t *testing.T) {
 	require.Len(t, md5s, 1)
 	assert.Equal(t, md5Of(data), md5s[0])
 }
+
+func TestAppendAccessToken(t *testing.T) {
+	assert.Equal(t, "https://d.pcs.baidu.com/file?fid=1", appendAccessToken("https://d.pcs.baidu.com/file?fid=1", ""))
+	got := appendAccessToken("https://d.pcs.baidu.com/file?fid=1", "tok")
+	assert.Contains(t, got, "access_token=tok")
+	got = appendAccessToken("https://d.pcs.baidu.com/file?fid=1&access_token=old", "tok")
+	assert.Equal(t, "https://d.pcs.baidu.com/file?fid=1&access_token=old", got)
+}

@@ -20,6 +20,7 @@ features:
 - Move
 - Purge
 - PutStream
+- PublicLink
 hashes:
 - md5
 precision: 1000000000

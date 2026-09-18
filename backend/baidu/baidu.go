@@ -1139,6 +1139,25 @@ func (o *Object) Remove(ctx context.Context) error {
 	return o.fs.filemanager(ctx, "delete", []map[string]string{{"path": o.path}})
 }
 
+// PublicLink returns a time-limited direct download URL for a file.
+func (f *Fs) PublicLink(ctx context.Context, remote string, expire fs.Duration, unlink bool) (string, error) {
+	if unlink {
+		return "", errors.New("baidu: download URLs expire on their own; unlink is not supported")
+	}
+	if _, err := f.dirCache.FindDir(ctx, remote, false); err == nil {
+		return "", fs.ErrorCantShareDirectories
+	}
+	o, err := f.NewObject(ctx, remote)
+	if err != nil {
+		return "", err
+	}
+	obj, ok := o.(*Object)
+	if !ok {
+		return "", fs.ErrorObjectNotFound
+	}
+	return f.downloadURL(ctx, obj.id, obj.path)
+}
+
 // Check the interfaces are satisfied
 var (
 	_ fs.Fs              = (*Fs)(nil)
@@ -1149,6 +1168,7 @@ var (
 	_ fs.DirCacheFlusher = (*Fs)(nil)
 	_ fs.PutStreamer     = (*Fs)(nil)
 	_ fs.Abouter         = (*Fs)(nil)
+	_ fs.PublicLinker    = (*Fs)(nil)
 	_ fs.Object          = (*Object)(nil)
 	_ fs.IDer            = (*Object)(nil)
 )

@@ -53,3 +53,6 @@ rclone copy /home/source oss:bucket/path
 Pick the endpoint for the bucket's region (Hangzhou, Beijing, Shenzhen,
 Hong Kong, accelerate, and so on). The wrapper copies the same region
 list as the S3 Alibaba provider.
+
+`rclone link oss:bucket/key` returns a presigned GET URL (direct
+download). Use `--expire` to shorten the default lifetime.

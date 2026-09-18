@@ -70,6 +70,19 @@ rclone mount pan: /mnt/baidu --vfs-cache-mode writes
 Restrict rclone to a folder with `root_folder_path`, for example
 `/backup`.
 
+## Direct download links
+
+`rclone link pan:path/to/file` returns Baidu's temporary **dlink**
+(直链). wget/curl usually need:
+
+```console
+curl -A 'pan.baidu.com' -L 'https://...'
+```
+
+The URL expires (often within hours). Directories cannot be linked.
+`--unlink` is not supported. Cookie downloads may also need the
+session User-Agent; open-platform tokens use `pan.baidu.com`.
+
 ## Limitations
 
 - Download links from the official API often require the User-Agent

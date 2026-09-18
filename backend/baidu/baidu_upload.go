@@ -233,6 +233,28 @@ func (f *Fs) uploadParts(ctx context.Context, in io.Reader, panPath, uploadID st
 	return nil
 }
 
+func appendAccessToken(dlink, token string) string {
+	if token == "" || strings.Contains(dlink, "access_token=") {
+		return dlink
+	}
+	sep := "?"
+	if strings.Contains(dlink, "?") {
+		sep = "&"
+	}
+	return dlink + sep + "access_token=" + url.QueryEscape(token)
+}
+
+func (f *Fs) downloadURL(ctx context.Context, id int64, panPath string) (string, error) {
+	item, err := f.fileMetas(ctx, id, panPath)
+	if err != nil {
+		return "", err
+	}
+	if item.Dlink == "" {
+		return "", errors.New("baidu: no download link")
+	}
+	return appendAccessToken(item.Dlink, f.accessToken()), nil
+}
+
 // Open the file for read
 func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadCloser, error) {
 	if o.id == 0 {
@@ -242,20 +264,9 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadClo
 		}
 		*o = *obj.(*Object)
 	}
-	item, err := o.fs.fileMetas(ctx, o.id, o.path)
+	dlink, err := o.fs.downloadURL(ctx, o.id, o.path)
 	if err != nil {
 		return nil, err
-	}
-	dlink := item.Dlink
-	if dlink == "" {
-		return nil, fmt.Errorf("baidu: no download link for %s", o.remote)
-	}
-	if token := o.fs.accessToken(); token != "" && !strings.Contains(dlink, "access_token=") {
-		sep := "?"
-		if strings.Contains(dlink, "?") {
-			sep = "&"
-		}
-		dlink += sep + "access_token=" + url.QueryEscape(token)
 	}
 	fs.FixRangeOption(options, o.size)
 	opts := rest.Opts{

@@ -56,4 +56,5 @@ Common S3 endpoints:
 ```console
 rclone lsd tos:
 rclone copy /home/source tos:bucket/path
+rclone link --expire 1h tos:bucket/key.bin
 ```

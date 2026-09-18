@@ -20,6 +20,7 @@ features:
 - OpenChunkWriter
 - Purge
 - PutStream
+- PublicLink
 - ReadMimeType
 - WriteMimeType
 hashes:

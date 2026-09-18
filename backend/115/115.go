@@ -53,6 +53,7 @@ func init() {
 		Name:        "115",
 		Description: "115 Drive",
 		NewFs:       NewFs,
+		Config:      Config,
 		Options: []fs.Option{{
 			Name: "cookie",
 			Help: `115 web cookie string.
@@ -60,6 +61,9 @@ func init() {
 Copy UID, CID, SEID and KID from the browser after logging in to
 https://115.com (DevTools → Application → Cookies). A single string
 like "UID=...; CID=...; SEID=...; KID=..." is enough.
+
+Leave this empty during rclone config to log in with a QR code
+instead (scan with the 115 app).
 
 This backend talks to the 115 web API (webapi.115.com). Do not use
 115 OpenAPI tokens; that API is deprecated.

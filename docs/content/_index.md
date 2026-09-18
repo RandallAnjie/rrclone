@@ -113,6 +113,22 @@ WebDAV or S3, that work out of the box.)
 
 {{< provider_list >}}
 {{< provider name="115 Drive" home="https://115.com/" config="/115/" start="true">}}
+{{< provider name="123 Cloud" home="https://www.123pan.com/" config="/123/" >}}
+{{< provider name="AList / OpenList" home="https://github.com/OpenListTeam/OpenList" config="/openlist/" >}}
+{{< provider name="Aliyun Drive" home="https://www.alipan.com/" config="/alipan/" >}}
+{{< provider name="Baidu Netdisk" home="https://pan.baidu.com/" config="/baidu/" >}}
+{{< provider name="China Telecom Cloud 189" home="https://cloud.189.cn/" config="/cloud189/" >}}
+{{< provider name="China Telecom Cloud 189 Share" home="https://cloud.189.cn/" config="/cloud189share/" >}}
+{{< provider name="China Mobile Yun 139" home="https://yun.139.com/" config="/yun139/" >}}
+{{< provider name="CloudDrive2" home="https://www.clouddrive2.com/" config="/clouddrive2/" >}}
+{{< provider name="Cloudreve" home="https://cloudreve.org/" config="/cloudreve/" >}}
+{{< provider name="GitHub" home="https://github.com/" config="/github/" >}}
+{{< provider name="Lanzou" home="https://www.lanzou.com/" config="/lanzou/" >}}
+{{< provider name="Quark Drive" home="https://pan.quark.cn/" config="/quark/" >}}
+{{< provider name="Quark Share" home="https://pan.quark.cn/" config="/quarkshare/" >}}
+{{< provider name="TeraBox" home="https://www.terabox.com/" config="/terabox/" >}}
+{{< provider name="Thunder Drive" home="https://pan.xunlei.com/" config="/thunder/" >}}
+{{< provider name="UC Drive" home="https://drive.uc.cn/" config="/uc/" >}}
 {{< provider name="1Fichier" home="https://1fichier.com/" config="/fichier/" >}}
 {{< provider name="Akamai Netstorage" home="https://www.akamai.com/us/en/products/media-delivery/netstorage.jsp" config="/netstorage/" >}}
 {{< provider name="Alibaba Cloud (Aliyun) Object Storage System (OSS)" home="https://www.alibabacloud.com/product/oss/" config="/s3/#alibaba-oss" >}}

@@ -32,8 +32,32 @@ rclone config
 
 See the following for detailed instructions for
 
-- [rrclone fork notes](/rrclone/) - custom API endpoints, 115 Drive, dashboard
+- [rrclone fork notes](/rrclone/) - custom API endpoints, extra backends, dashboard
 - [115 Drive](/115/)
+- [115 Share](/115share/)
+- [123 Cloud](/123/)
+- [123 Share](/123share/)
+- [AList / OpenList](/openlist/)
+- [Aliyun Drive](/alipan/)
+- [Aliyun Drive Share](/alishare/)
+- [Aliyun Docs](/alidoc/)
+- [Netease Music](/netease/)
+- [KodBox](/kodbox/)
+- [Lanzou](/lanzou/)
+- [MediaFire](/mediafire/)
+- [Misskey](/misskey/)
+- [Quark Drive](/quark/)
+- [Quark Share](/quarkshare/)
+- [China Telecom Cloud 189](/cloud189/)
+- [China Telecom Cloud 189 Share](/cloud189share/)
+- [CloudDrive2](/clouddrive2/)
+- [TeraBox](/terabox/)
+- [Thunder Drive](/thunder/)
+- [UC Drive](/uc/)
+- [Upyun USS](/upyun/)
+- [WeiYun](/weiyun/)
+- [WoPan](/wopan/)
+- [WPS Drive](/wps/)
 - [1Fichier](/fichier/)
 - [Akamai Netstorage](/netstorage/)
 - [Alias](/alias/)

@@ -1,0 +1,18 @@
+backend: "cloud189share"
+name: China Telecom Cloud 189 Share
+tier: Tier 2
+maintainers: External
+features_score: 2
+integration_tests: Unknown
+data_integrity: Unknown
+performance: High
+adoption: Some use
+docs: Full
+security: High
+virtual: false
+remote: 'TestCloud189Share:'
+features:
+- CanHaveEmptyDirectories
+- DirCacheFlush
+hashes: []
+precision: 1

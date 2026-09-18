@@ -1,0 +1,164 @@
+syntax = "proto3";
+
+package clouddrive;
+
+option go_package = "github.com/rclone/rclone/backend/clouddrive2/api";
+
+import "google/protobuf/timestamp.proto";
+
+// CloudDriveFileSrv is the subset of the published CloudDrive2 gRPC
+// service used by this backend. Field numbers match
+// https://www.clouddrive2.com/api/clouddrive.proto
+service CloudDriveFileSrv {
+  rpc GetToken(GetTokenRequest) returns (JWTToken);
+  rpc GetSubFiles(ListSubFileRequest) returns (stream SubFilesReply);
+  rpc FindFileByPath(FindFileByPathRequest) returns (CloudDriveFile);
+  rpc CreateFolder(CreateFolderRequest) returns (CreateFolderResult);
+  rpc RenameFile(RenameFileRequest) returns (FileOperationResult);
+  rpc MoveFile(MoveFileRequest) returns (FileOperationResult);
+  rpc CopyFile(CopyFileRequest) returns (FileOperationResult);
+  rpc DeleteFile(FileRequest) returns (FileOperationResult);
+  rpc GetSpaceInfo(FileRequest) returns (SpaceInfo);
+  rpc CreateFile(CreateFileRequest) returns (CreateFileResult);
+  rpc CloseFile(CloseFileRequest) returns (FileOperationResult);
+  rpc WriteToFile(WriteFileRequest) returns (WriteFileResult);
+  rpc GetDownloadUrlPath(GetDownloadUrlPathRequest) returns (DownloadUrlPathInfo);
+}
+
+message GetTokenRequest {
+  string userName = 1;
+  string password = 2;
+  optional string totpCode = 3;
+}
+
+message JWTToken {
+  bool success = 1;
+  string errorMessage = 2;
+  string token = 3;
+  google.protobuf.Timestamp expiration = 4;
+}
+
+message FileRequest {
+  string path = 1;
+  optional bool forceRefresh = 2;
+}
+
+message FileOperationResult {
+  bool success = 1;
+  string errorMessage = 2;
+  repeated string resultFilePaths = 3;
+}
+
+message GetDownloadUrlPathRequest {
+  string path = 1;
+  bool preview = 2;
+  bool lazy_read = 3;
+  bool get_direct_url = 4;
+}
+
+message DownloadUrlPathInfo {
+  string downloadUrlPath = 1;
+  optional uint64 expiresIn = 2;
+  optional string directUrl = 3;
+  optional string userAgent = 4;
+  map<string, string> additionalHeaders = 5;
+}
+
+message ListSubFileRequest {
+  string path = 1;
+  bool forceRefresh = 2;
+  optional bool checkExpires = 3;
+}
+
+message SubFilesReply {
+  repeated CloudDriveFile subFiles = 1;
+}
+
+message FindFileByPathRequest {
+  string parentPath = 1;
+  string path = 2;
+}
+
+message CreateFolderRequest {
+  string parentPath = 1;
+  string folderName = 2;
+}
+
+message CreateFolderResult {
+  CloudDriveFile folderCreated = 1;
+  FileOperationResult result = 2;
+}
+
+message CreateFileRequest {
+  string parentPath = 1;
+  string fileName = 2;
+}
+
+message CreateFileResult {
+  uint64 fileHandle = 1;
+}
+
+message CloseFileRequest {
+  uint64 fileHandle = 1;
+}
+
+message MoveFileRequest {
+  enum ConflictPolicy {
+    Overwrite = 0;
+    Rename = 1;
+    Skip = 2;
+  }
+  repeated string theFilePaths = 1;
+  string destPath = 2;
+  optional ConflictPolicy conflictPolicy = 3;
+}
+
+message CopyFileRequest {
+  repeated string theFilePaths = 1;
+  string destPath = 2;
+}
+
+message WriteFileRequest {
+  uint64 fileHandle = 1;
+  uint64 startPos = 2;
+  uint64 length = 3;
+  bytes buffer = 4;
+  bool closeFile = 5;
+}
+
+message WriteFileResult {
+  uint64 bytesWritten = 1;
+}
+
+message RenameFileRequest {
+  string theFilePath = 1;
+  string newName = 2;
+}
+
+message CloudDriveFile {
+  string id = 1;
+  string name = 2;
+  string fullPathName = 3;
+  int64 size = 4;
+  enum FileType {
+    Directory = 0;
+    File = 1;
+    Other = 2;
+  }
+  FileType fileType = 5;
+  google.protobuf.Timestamp createTime = 6;
+  google.protobuf.Timestamp writeTime = 7;
+  google.protobuf.Timestamp accessTime = 8;
+  string thumbnailUrl = 10;
+  string previewUrl = 11;
+  string originalPath = 14;
+  bool isDirectory = 30;
+  map<uint32, string> fileHashes = 70;
+  optional DownloadUrlPathInfo downloadUrlPath = 76;
+}
+
+message SpaceInfo {
+  int64 totalSpace = 1;
+  int64 usedSpace = 2;
+  int64 freeSpace = 3;
+}

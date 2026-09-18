@@ -166,3 +166,20 @@ func TestPrecision(t *testing.T) {
 		t.Fatal("expected modtime not supported")
 	}
 }
+
+func TestParseQRTokenJSON(t *testing.T) {
+	tok, err := parseQRTokenJSON([]byte(`{"state":true,"data":{"uid":"abc","time":1,"sign":"s","qrcode":"https://example/qr"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok.UID != "abc" || tok.QRCode == "" {
+		t.Fatalf("%+v", tok)
+	}
+}
+
+func TestConfigSkipsWhenCookieSet(t *testing.T) {
+	out, err := Config(context.Background(), "x", configmap.Simple{"cookie": "UID=u; CID=c; SEID=s"}, fs.ConfigIn{})
+	if err != nil || out != nil {
+		t.Fatalf("out=%v err=%v", out, err)
+	}
+}

@@ -719,6 +719,21 @@ resource key is not needed.
 			Advanced:  true,
 			Sensitive: true,
 		}, {
+			Name:    "link_direct",
+			Default: true,
+			Help: `rclone link returns a direct download URL for files.
+
+When true (the default), rclone link shares the file with "anyone with
+the link" and returns https://drive.google.com/uc?export=download&id=...
+which wget/curl can usually fetch. Google Docs/Sheets stay as a Drive
+viewer URL. Folders are always a viewer URL.
+
+Large files may still hit Google's virus-scan interstitial instead of
+the bytes. Set this false to get the classic https://drive.google.com/open?id=...
+share page for every file.
+`,
+			Advanced: true,
+		}, {
 			Name: "fast_list_bug_fix",
 			Help: `Work around a bug in Google Drive listing.
 
@@ -900,6 +915,7 @@ type Options struct {
 	SkipShortcuts             bool                 `config:"skip_shortcuts"`
 	SkipDanglingShortcuts     bool                 `config:"skip_dangling_shortcuts"`
 	ResourceKey               string               `config:"resource_key"`
+	LinkDirect                bool                 `config:"link_direct"`
 	FastListBugFix            bool                 `config:"fast_list_bug_fix"`
 	MetadataOwner             rwChoice             `config:"metadata_owner"`
 	MetadataPermissions       rwChoice             `config:"metadata_permissions"`
@@ -3847,7 +3863,9 @@ func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (fs.Object,
 // PublicLink adds a "readable by anyone with link" permission on the given file or folder.
 func (f *Fs) PublicLink(ctx context.Context, remote string, expire fs.Duration, unlink bool) (link string, err error) {
 	id, err := f.dirCache.FindDir(ctx, remote, false)
-	if err == nil {
+	isDir := err == nil
+	mimeType := ""
+	if isDir {
 		fs.Debugf(f, "attempting to share directory '%s'", remote)
 		id = shortcutID(id)
 	} else {
@@ -3857,6 +3875,9 @@ func (f *Fs) PublicLink(ctx context.Context, remote string, expire fs.Duration, 
 			return "", err
 		}
 		id = shortcutID(o.(fs.IDer).ID())
+		if m, ok := o.(fs.MimeTyper); ok {
+			mimeType = m.MimeType(ctx)
+		}
 	}
 
 	permission := &drive.Permission{
@@ -3878,7 +3899,15 @@ func (f *Fs) PublicLink(ctx context.Context, remote string, expire fs.Duration, 
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("https://drive.google.com/open?id=%s", id), nil
+	return publicLinkURL(id, mimeType, isDir, f.opt.LinkDirect), nil
+}
+
+// publicLinkURL is the URL rclone link prints after the file has been shared.
+func publicLinkURL(id, mimeType string, isDir, direct bool) string {
+	if isDir || !direct || isInternalMimeType(mimeType) {
+		return fmt.Sprintf("https://drive.google.com/open?id=%s", id)
+	}
+	return fmt.Sprintf("https://drive.google.com/uc?export=download&confirm=t&id=%s", id)
 }
 
 // DirMove moves src, srcRemote to this remote at dstRemote

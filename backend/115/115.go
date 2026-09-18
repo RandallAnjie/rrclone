@@ -1229,6 +1229,33 @@ func (o *Object) Remove(ctx context.Context) error {
 	return nil
 }
 
+// PublicLink returns a time-limited direct download URL for a file.
+func (f *Fs) PublicLink(ctx context.Context, remote string, expire fs.Duration, unlink bool) (string, error) {
+	if unlink {
+		return "", errors.New("115: download URLs expire on their own; unlink is not supported")
+	}
+	if _, err := f.dirCache.FindDir(ctx, remote, false); err == nil {
+		return "", fs.ErrorCantShareDirectories
+	}
+	o, err := f.NewObject(ctx, remote)
+	if err != nil {
+		return "", err
+	}
+	obj, ok := o.(*Object)
+	if !ok {
+		return "", fs.ErrorObjectNotFound
+	}
+	if obj.pickCode == "" {
+		if err := obj.readMetaData(ctx); err != nil {
+			return "", err
+		}
+	}
+	if obj.pickCode == "" {
+		return "", errors.New("115: missing pickcode")
+	}
+	return f.getDownloadURL(ctx, obj.pickCode)
+}
+
 // Check the interfaces are satisfied
 var (
 	_ fs.Fs              = (*Fs)(nil)
@@ -1238,6 +1265,7 @@ var (
 	_ fs.DirMover        = (*Fs)(nil)
 	_ fs.Abouter         = (*Fs)(nil)
 	_ fs.DirCacheFlusher = (*Fs)(nil)
+	_ fs.PublicLinker    = (*Fs)(nil)
 	_ fs.Object          = (*Object)(nil)
 	_ fs.IDer            = (*Object)(nil)
 	_ fs.ParentIDer      = (*Object)(nil)

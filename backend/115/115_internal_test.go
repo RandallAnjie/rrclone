@@ -146,6 +146,17 @@ func TestMockListAndDownload(t *testing.T) {
 	if string(got) != payload {
 		t.Fatalf("got %q", got)
 	}
+	link, err := fsi.(*Fs).PublicLink(ctx, "readme.txt", fs.DurationOff, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(link, "/dl/readme") {
+		t.Fatalf("direct link = %q", link)
+	}
+	_, err = fsi.(*Fs).PublicLink(ctx, "docs", fs.DurationOff, false)
+	if err != fs.ErrorCantShareDirectories {
+		t.Fatalf("dir link err=%v", err)
+	}
 }
 
 func tsURL(r *http.Request, path string) string {

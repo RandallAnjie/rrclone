@@ -1,0 +1,25 @@
+backend: baidu
+name: Baidu Netdisk
+tier: Tier 2
+maintainers: External
+features_score: 4
+integration_tests: Unknown
+data_integrity: Hash
+performance: Medium
+adoption: Some use
+docs: Full
+security: High
+virtual: false
+remote: 'TestBaidu:'
+features:
+- About
+- CanHaveEmptyDirectories
+- Copy
+- DirCacheFlush
+- DirMove
+- Move
+- Purge
+- PutStream
+hashes:
+- md5
+precision: 1000000000

@@ -83,10 +83,12 @@ rclone link onedrive:report.pdf
 rclone link s3:bucket/key.bin
 ```
 
+Google Drive 默认是 **A 机签名、B 机下载**：不把文件改成「知道链接的任何人」，只签发大约 1 小时有效的 API 下载地址。B 机直接 wget/curl 这条 URL。Token 和 rclone 账号权限相同，当密钥看。配了 `endpoint` 时 URL 走反代。
+
 | 后端 | `rclone link` | 是不是直链 | 说明 |
 | --- | --- | --- | --- |
 | [115](/115/) | 有 | 是 | 115 CDN，几小时内过期，可能绑 IP；不能链目录 |
-| [Google Drive](/drive/) | 有 | 普通文件是 | 默认 `uc?export=download`；Docs/表格仍是预览页；很大的文件可能出现病毒扫描页。`--drive-link-direct=false` 恢复原来的 `/open?id=` |
+| [Google Drive](/drive/) | 有 | 是（签名直链） | **不改分享权限**。A 机 `rclone link` 签发带 OAuth access token 的 `files.get?alt=media` URL，B 机 wget/curl；token 大约 1 小时过期，URL 里就是账号密钥。自定义 `endpoint` 会写进 URL。目录 / Google 文档不行。`--drive-link-share` 才是以前的「知道链接的任何人」 |
 | [Dropbox](/dropbox/) | 有 | 文件是 | 分享链接改成 `dl=1` |
 | [OneDrive](/onedrive/) | 有 | 文件是 | 原版就会把分享页转成下载地址 |
 | [S3](/s3/)（含阿里云 OSS、火山 TOS、R2、MinIO） | 有 | 是 | 预签名 GET，可用 `--expire` |

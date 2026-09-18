@@ -2040,21 +2040,40 @@ rclone backend rescue drive: -o delete
 
 ## Direct download links
 
-`rclone link drive:path/to/file` shares the file with "anyone with the
-link" and, by default, prints a **direct download URL**:
+`rclone link drive:path/to/file` does **not** share the file. It prints
+a short-lived Drive API download URL that another machine can
+wget/curl (A signs, B downloads):
 
 ```text
-https://drive.google.com/uc?export=download&confirm=t&id=FILE_ID
+https://www.googleapis.com/drive/v3/files/FILE_ID?alt=media&supportsAllDrives=true&access_token=...
 ```
 
-wget/curl can usually fetch ordinary files from that URL. Native
-Google Docs/Sheets still return the Drive viewer URL
-(`https://drive.google.com/open?id=...`). Folders always return the
-viewer URL.
+If the remote has a custom `endpoint` (a reverse proxy), the URL uses
+that host instead of `www.googleapis.com`, so machine B in China can
+hit the same proxy.
 
-Large files may still hit Google's virus-scan interstitial instead of
-the file bytes. Set `link_direct = false` (or `--drive-link-direct=false`)
-to get the classic viewer share page for every file.
+This is not an S3-style HMAC signature. Drive has no file-scoped signed
+URL, so rclone puts the current OAuth **access token** in the query
+string:
+
+- Typically valid for about **one hour** (the token lifetime).
+  `--expire` cannot make it last longer.
+- The token has the same Drive access as rclone itself. Treat the URL
+  as a secret; do not post it publicly.
+- Sharing ACLs are not changed. Nobody else can open the file in the
+  Drive UI from this URL.
+- Folders and native Google Docs/Sheets/Slides have no binary download
+  URL.
+- `--unlink` is not supported; the URL dies when the token expires.
+- Google may redirect large files to `*.googleusercontent.com`. If B
+  cannot reach that host, the reverse proxy should follow or rewrite
+  the redirect.
+
+To restore the old "anyone with the link" share, set
+`link_share = true` (or `--drive-link-share`). That changes the ACL and
+returns `https://drive.google.com/uc?export=download&confirm=t&id=...`
+for ordinary files (viewer URL for folders and Google Docs). Large
+public shares may still hit Google's virus-scan interstitial.
 
 ## Limitations
 

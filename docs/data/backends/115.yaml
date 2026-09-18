@@ -18,6 +18,7 @@ features:
 - DirCacheFlush
 - DirMove
 - Move
+- PublicLink
 - Purge
 hashes:
 - sha1

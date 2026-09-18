@@ -17,6 +17,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -81,6 +82,8 @@ const (
 	listRInputBuffer = 1000 // size of input buffer when using ListR
 	defaultXDGIcon   = "text-html"
 )
+
+const defaultDriveV3BasePath = "https://www.googleapis.com/drive/v3/"
 
 // Globals
 var (
@@ -719,6 +722,23 @@ resource key is not needed.
 			Advanced:  true,
 			Sensitive: true,
 		}, {
+			Name:    "link_share",
+			Default: false,
+			Help: `rclone link creates an "anyone with the link" share.
+
+The default is false: rclone link does not change ACLs. It prints a
+short-lived Drive API download URL with an OAuth access token so
+another machine can wget/curl the file (A signs, B downloads). The
+token is typically valid for about an hour and has the same Drive
+access as rclone itself - treat the URL as a secret. A custom
+endpoint is honoured so a reverse proxy can serve the bytes.
+
+Set this true to restore a public share (anyone with the link can
+read the file until you revoke it). Folders and Google Docs only
+work in this mode.
+`,
+			Advanced: true,
+		}, {
 			Name: "fast_list_bug_fix",
 			Help: `Work around a bug in Google Drive listing.
 
@@ -900,6 +920,7 @@ type Options struct {
 	SkipShortcuts             bool                 `config:"skip_shortcuts"`
 	SkipDanglingShortcuts     bool                 `config:"skip_dangling_shortcuts"`
 	ResourceKey               string               `config:"resource_key"`
+	LinkShare                 bool                 `config:"link_share"`
 	FastListBugFix            bool                 `config:"fast_list_bug_fix"`
 	MetadataOwner             rwChoice             `config:"metadata_owner"`
 	MetadataPermissions       rwChoice             `config:"metadata_permissions"`
@@ -3844,10 +3865,104 @@ func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (fs.Object,
 	return f.newObjectWithInfo(ctx, remote, info)
 }
 
-// PublicLink adds a "readable by anyone with link" permission on the given file or folder.
+// PublicLink returns a short-lived authenticated download URL for a file.
+//
+// This does not change sharing permissions. The URL includes the current
+// OAuth access token (typically valid about an hour) so another process can
+// download with wget or curl. The configured endpoint is used so a reverse
+// proxy can serve the bytes. Google often rejects access_token in the query
+// with an automated-queries HTML 403; sending the same token as
+// Authorization: Bearer, or having the proxy do that rewrite, works.
+//
+// Folders and native Google Docs have no binary download URL.
+// With link_share set, this instead creates an "anyone with the link"
+// permission and returns a Drive share URL.
 func (f *Fs) PublicLink(ctx context.Context, remote string, expire fs.Duration, unlink bool) (link string, err error) {
+	if f.opt.LinkShare {
+		return f.publicShareLink(ctx, remote)
+	}
+	if unlink {
+		return "", errors.New("drive: signed download URLs expire with the OAuth token; unlink is not supported")
+	}
+	if _, err := f.dirCache.FindDir(ctx, remote, false); err == nil {
+		return "", fs.ErrorCantShareDirectories
+	}
+	o, err := f.NewObject(ctx, remote)
+	if err != nil {
+		return "", err
+	}
+	obj, ok := o.(*Object)
+	if !ok {
+		return "", errors.New("drive: Google Docs/Sheets/Slides have no binary download URL")
+	}
+	tok, err := f.oauthAccessToken()
+	if err != nil {
+		return "", err
+	}
+	if expire.IsSet() && !tok.Expiry.IsZero() {
+		remain := time.Until(tok.Expiry)
+		if remain > 0 && time.Duration(expire) > remain {
+			fs.Logf(f, "drive: --expire %v is longer than the access token lifetime %v; the URL stops working when the token expires", expire, remain.Truncate(time.Second))
+		}
+	}
+	resourceKey := ""
+	if obj.resourceKey != nil {
+		resourceKey = *obj.resourceKey
+	}
+	base := defaultDriveV3BasePath
+	if f.svc != nil && f.svc.BasePath != "" {
+		base = f.svc.BasePath
+	}
+	return signedDownloadURL(base, actualID(obj.id), tok.AccessToken, f.opt.AcknowledgeAbuse, resourceKey), nil
+}
+
+// oauthAccessToken returns a current OAuth token from the Drive HTTP client,
+// refreshing it if needed.
+func (f *Fs) oauthAccessToken() (*oauth2.Token, error) {
+	if f.client == nil || f.client.Transport == nil {
+		return nil, errors.New("drive: missing OAuth client")
+	}
+	t, ok := f.client.Transport.(*oauth2.Transport)
+	if !ok {
+		return nil, errors.New("drive: OAuth transport not available")
+	}
+	tok, err := t.Source.Token()
+	if err != nil {
+		return nil, fmt.Errorf("drive: get access token: %w", err)
+	}
+	if tok == nil || tok.AccessToken == "" {
+		return nil, errors.New("drive: empty access token")
+	}
+	return tok, nil
+}
+
+// signedDownloadURL builds a Drive files.get alt=media URL that authenticates
+// with access_token in the query string so a second machine can download
+// without an Authorization header.
+func signedDownloadURL(basePath, fileID, accessToken string, acknowledgeAbuse bool, resourceKey string) string {
+	if basePath == "" {
+		basePath = defaultDriveV3BasePath
+	}
+	q := url.Values{}
+	q.Set("alt", "media")
+	q.Set("supportsAllDrives", "true")
+	if acknowledgeAbuse {
+		q.Set("acknowledgeAbuse", "true")
+	}
+	if resourceKey != "" {
+		q.Set("resourceKey", resourceKey)
+	}
+	q.Set("access_token", accessToken)
+	return strings.TrimSuffix(basePath, "/") + "/files/" + url.PathEscape(fileID) + "?" + q.Encode()
+}
+
+// publicShareLink creates an "anyone with the link" reader permission and
+// returns a Drive share or download URL.
+func (f *Fs) publicShareLink(ctx context.Context, remote string) (link string, err error) {
 	id, err := f.dirCache.FindDir(ctx, remote, false)
-	if err == nil {
+	isDir := err == nil
+	mimeType := ""
+	if isDir {
 		fs.Debugf(f, "attempting to share directory '%s'", remote)
 		id = shortcutID(id)
 	} else {
@@ -3857,6 +3972,9 @@ func (f *Fs) PublicLink(ctx context.Context, remote string, expire fs.Duration, 
 			return "", err
 		}
 		id = shortcutID(o.(fs.IDer).ID())
+		if m, ok := o.(fs.MimeTyper); ok {
+			mimeType = m.MimeType(ctx)
+		}
 	}
 
 	permission := &drive.Permission{
@@ -3866,8 +3984,7 @@ func (f *Fs) PublicLink(ctx context.Context, remote string, expire fs.Duration, 
 	}
 
 	err = f.pacer.Call(func() (bool, error) {
-		// TODO: On TeamDrives this might fail if lacking permissions to change ACLs.
-		// Need to either check `canShare` attribute on the object or see if a sufficient permission is already present.
+		// TeamDrives may reject this if the caller cannot change ACLs.
 		_, err = f.svc.Permissions.Create(id, permission).
 			Fields("").
 			SupportsAllDrives(true).
@@ -3878,7 +3995,15 @@ func (f *Fs) PublicLink(ctx context.Context, remote string, expire fs.Duration, 
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("https://drive.google.com/open?id=%s", id), nil
+	return publicLinkURL(id, mimeType, isDir), nil
+}
+
+// publicLinkURL is the URL rclone link prints after the file has been shared.
+func publicLinkURL(id, mimeType string, isDir bool) string {
+	if isDir || isInternalMimeType(mimeType) {
+		return fmt.Sprintf("https://drive.google.com/open?id=%s", id)
+	}
+	return fmt.Sprintf("https://drive.google.com/uc?export=download&confirm=t&id=%s", id)
 }
 
 // DirMove moves src, srcRemote to this remote at dstRemote

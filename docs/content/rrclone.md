@@ -43,6 +43,7 @@ rrclone 是 [rclone](https://rclone.org) 的增强分支。命令、后端和官
 
 - **自定义 API**：官方域名不通时，把请求打到你自己的反代，见下面 [URL 怎么换](#自定义-apiurl-怎么换)
 - **115 Drive**：浏览器 cookie 登录，列表 / 上传 / 下载 / 秒传，见 [115](/115/)
+- **文件直链**：`rclone link` 对 115、Google Drive、Dropbox、OneDrive、S3 给出可 wget 的下载地址，见下面 [文件直链](#文件直链)
 - **Drive 多账号**：多个 OAuth token 文件轮换，适合大量上传和挂载，见 [Drive OAuth account rotation](/drive/#oauth-account-rotation)
 - **看板**：传输、远程、任务、挂载、多主机 RC 地址
 
@@ -69,6 +70,33 @@ rrclone 是 [rclone](https://rclone.org) 的增强分支。命令、后端和官
 | pCloud | `hostname` | 原版就有欧洲站 `eapi.pcloud.com` |
 
 S3 兼容存储本来就用 `endpoint`（Cloudflare R2、MinIO、阿里云 OSS 等），不用再改。
+
+## 文件直链
+
+`rclone link remote:path/to/file` 会尽量给出 **wget/curl 能直接拉文件** 的 URL，不是预览页。
+
+```console
+rclone link 115:备份/电影.mp4
+rclone link GoogleDrive:video.mp4
+rclone link dropbox:photo.jpg
+rclone link onedrive:report.pdf
+rclone link s3:bucket/key.bin
+```
+
+Google Drive 默认是 **A 机签名、B 机下载**：不把文件改成「知道链接的任何人」，只签发大约 1 小时有效的 API 下载地址。配了 `endpoint` 时 URL 走反代。Token 和 rclone 账号权限相同，当密钥看。Google 经常把 query 里的 `access_token` 拦成反爬 403，B 机改用 `Authorization: Bearer`，或让反代把 query token 转成这个头再回源。
+
+| 后端 | `rclone link` | 是不是直链 | 说明 |
+| --- | --- | --- | --- |
+| [115](/115/) | 有 | 是 | 115 CDN，几小时内过期，可能绑 IP；不能链目录 |
+| [Google Drive](/drive/) | 有 | 是（签名直链） | **不改分享权限**。A 机 `rclone link` 签发带 OAuth access token 的 `files.get?alt=media` URL，B 机 wget/curl；token 大约 1 小时过期，URL 里就是账号密钥。自定义 `endpoint` 会写进 URL。目录 / Google 文档不行。`--drive-link-share` 才是以前的「知道链接的任何人」 |
+| [Dropbox](/dropbox/) | 有 | 文件是 | 分享链接改成 `dl=1` |
+| [OneDrive](/onedrive/) | 有 | 文件是 | 原版就会把分享页转成下载地址 |
+| [S3](/s3/)（含阿里云 OSS、火山 TOS、R2、MinIO） | 有 | 是 | 预签名 GET，可用 `--expire` |
+| 123 / 阿里云盘 / 夸克 / 天翼 | 随对应后端 PR | 是 | 和 115 一样走官方临时下载地址 |
+| 百度网盘 | 随 OSS/TOS/百度 PR | 是 | `filemetas` 的 dlink，要带 `User-Agent: pan.baidu.com`，会过期 |
+| Box / Mega 等 | 有 | 多半是预览/分享页 | 对方 API 不给匿名直链 |
+
+没有 `rclone link` 的后端，只能 `rclone copy` / `rclone cat` / mount。
 
 ## 自定义 API：URL 怎么换
 

@@ -475,3 +475,18 @@ func TestFindSharedFileResolvesDecodedName(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, encodedName, o.remote)
 }
+
+func TestFileShareToDirect(t *testing.T) {
+	got := fileShareToDirect("https://www.dropbox.com/s/abc/file.txt?dl=0")
+	if !strings.Contains(got, "dl=1") || strings.Contains(got, "dl=0") {
+		t.Fatalf("got %q", got)
+	}
+	got = fileShareToDirect("https://www.dropbox.com/scl/fi/xyz/file.txt")
+	if !strings.Contains(got, "dl=1") {
+		t.Fatalf("got %q", got)
+	}
+	got = fileShareToDirect("not a url")
+	if got != "not a url" {
+		t.Fatalf("passthrough got %q", got)
+	}
+}

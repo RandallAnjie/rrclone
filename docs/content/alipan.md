@@ -83,3 +83,8 @@ Endpoint for the Aliyun Drive API. Web login defaults to
 
 Token URL for web refresh_token login. Default
 `https://auth.alipan.com/v2/account/token`.
+
+## Direct download links
+
+`rclone link remote:path/to/file` returns a time-limited download URL
+from Aliyun Drive (typically a few hours). Directories cannot be linked.

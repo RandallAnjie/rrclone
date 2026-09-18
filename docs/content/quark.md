@@ -60,3 +60,8 @@ ID of the root folder. Leave blank to use the account root.
 
 Endpoint for the Quark Drive API. Default
 `https://drive-pc.quark.cn/1/clouddrive`.
+
+## Direct download links
+
+`rclone link remote:path/to/file` returns a time-limited download URL.
+Directories cannot be linked.

@@ -44,6 +44,7 @@ rrclone 是 [rclone](https://rclone.org) 的增强分支。命令、后端和官
 - **自定义 API**：官方域名不通时，把请求打到你自己的反代，见下面 [URL 怎么换](#自定义-apiurl-怎么换)
 - **115 Drive**：浏览器 cookie 或配置时扫码，列表 / 上传 / 下载 / 秒传，见 [115](/115/)
 - **国内网盘**：123、阿里云盘、百度、夸克、UC、天翼、和彩云、迅雷、蓝奏、微云、沃盘等，见下面 [后端](#后端)
+- **文件直链**：`rclone link` 对 115、123、阿里云盘、夸克、天翼 给出临时 CDN 下载地址
 - **Drive 多账号**：多个 OAuth token 文件轮换，适合大量上传和挂载，见 [Drive OAuth account rotation](/drive/#oauth-account-rotation)
 - **看板**：传输、远程、任务、挂载、多主机 RC 地址
 

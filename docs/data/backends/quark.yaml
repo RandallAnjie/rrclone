@@ -16,6 +16,7 @@ features:
 - DirCacheFlush
 - DirMove
 - Move
+- PublicLink
 - Purge
 hashes: []
 precision: 1ms

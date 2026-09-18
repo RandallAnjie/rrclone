@@ -70,3 +70,8 @@ Endpoint for the Cloud 189 web API. Default `https://cloud.189.cn`.
 #### --cloud189-auth_endpoint
 
 Endpoint for Cloud 189 SSO login. Default `https://open.e.189.cn`.
+
+## Direct download links
+
+`rclone link remote:path/to/file` returns a time-limited download URL.
+Directories cannot be linked.

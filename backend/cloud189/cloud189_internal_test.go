@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config/configmap"
 )
 
@@ -77,6 +78,13 @@ func TestMockListAndDownload(t *testing.T) {
 	}
 	if string(got) != payload {
 		t.Fatalf("got %q", got)
+	}
+	link, err := fsi.(*Fs).PublicLink(ctx, "readme.txt", fs.DurationOff, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(link, "/dl/readme") {
+		t.Fatalf("direct link = %q", link)
 	}
 }
 

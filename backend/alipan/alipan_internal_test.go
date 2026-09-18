@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rclone/rclone/backend/alipan/api"
+	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/hash"
 )
@@ -101,6 +102,13 @@ func TestMockListAndDownload(t *testing.T) {
 	}
 	if string(body) != payload {
 		t.Fatalf("got %q", body)
+	}
+	link, err := fsi.(*Fs).PublicLink(ctx, "readme.txt", fs.DurationOff, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(link, "/dl/readme") {
+		t.Fatalf("direct link = %q", link)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rclone/rclone/backend/123/api"
+	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/hash"
 	"github.com/rclone/rclone/fs/object"
@@ -158,6 +159,13 @@ func TestMockListDownloadUpload(t *testing.T) {
 	}
 	if string(got) != payload {
 		t.Fatalf("got %q", got)
+	}
+	link, err := fsi.(*Fs).PublicLink(ctx, "readme.txt", fs.DurationOff, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(link, "/dl/readme") {
+		t.Fatalf("direct link = %q", link)
 	}
 
 	src := object.NewStaticObjectInfo("hello.txt", time.Now(), int64(len(payload)), true, map[hash.Type]string{hash.MD5: etag}, nil)

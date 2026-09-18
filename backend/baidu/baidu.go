@@ -162,7 +162,7 @@ type Fs struct {
 	pacer    *fs.Pacer
 	dirCache *dircache.DirCache
 	m        configmap.Mapper
-	mu       sync.Mutex
+	mu       *sync.Mutex
 	bduss    string
 	stoken   string
 	trueRoot string
@@ -311,6 +311,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		pcs:      rest.NewClient(client).SetRoot(pcsRootURL),
 		pacer:    fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(time.Duration(opt.PacerMinSleep)), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
 		m:        m,
+		mu:       new(sync.Mutex),
 		bduss:    bduss,
 		stoken:   stoken,
 		trueRoot: trueRootID,

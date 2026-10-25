@@ -54,6 +54,7 @@ Environment:
   RRCLONE_BIN_DIR        Binary install dir (default: /usr/bin, or /usr/local/bin on macOS)
   RRCLONE_MIGRATE_FROM   Explicit path to an official rclone.conf to copy
   RRCLONE_SOURCE_DIR     Local source tree for Go fallback (skips git clone)
+  RRCLONE_SKIP_CHECKSUM  Set to 1 to install even if SHA256SUMS can't be checked
 EOF
   exit 1
 }
@@ -81,6 +82,45 @@ need_cmd() {
     echo "Required command not found: $1" 1>&2
     exit 1
   fi
+}
+
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    return 1
+  fi
+}
+
+# Check a downloaded release asset against the release's SHA256SUMS.
+verify_checksum() {
+  local file="$1" sums_url="$2" expected actual
+  if [ "${RRCLONE_SKIP_CHECKSUM:-0}" = "1" ]; then
+    log "RRCLONE_SKIP_CHECKSUM=1: not verifying ${file}"
+    return 0
+  fi
+  if ! curl -fsSL -o SHA256SUMS "$sums_url"; then
+    echo "Could not download ${sums_url} to verify ${file}." 1>&2
+    echo "Set RRCLONE_SKIP_CHECKSUM=1 to install without verification." 1>&2
+    exit 6
+  fi
+  expected=$(awk -v f="$file" '$2 == f || $2 == "./" f || $2 == "*" f {print $1; exit}' SHA256SUMS)
+  if [ -z "$expected" ]; then
+    echo "${file} is not listed in SHA256SUMS." 1>&2
+    exit 6
+  fi
+  if ! actual=$(sha256_of "$file"); then
+    echo "Need sha256sum or shasum to verify ${file}." 1>&2
+    echo "Set RRCLONE_SKIP_CHECKSUM=1 to install without verification." 1>&2
+    exit 6
+  fi
+  if [ "$expected" != "$actual" ]; then
+    echo "Checksum mismatch for ${file}: expected ${expected}, got ${actual}" 1>&2
+    exit 6
+  fi
+  log "Verified ${file} (sha256 ${actual})"
 }
 
 # Local checkout when this file is run from a git clone (not curl | bash).
@@ -384,6 +424,7 @@ rrclone_install_main() {
   fi
 
   if [ "$download_ok" -eq 1 ]; then
+    verify_checksum "$asset" "${RELEASE_BASE}/latest/download/SHA256SUMS"
     extract_zip "$asset"
   else
     local src_dir=""

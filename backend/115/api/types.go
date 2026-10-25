@@ -99,23 +99,31 @@ func (r *BaseResponse) Message() string {
 	return r.Msg
 }
 
-// Err returns nil if State is true, otherwise a formatted error.
+// Error is a failed 115 API response
+type Error struct {
+	Message string
+	Errno   int64
+}
+
+// Error implements the error interface
+func (e *Error) Error() string {
+	switch {
+	case e.Message == "" && e.Errno == 0:
+		return "115: request failed"
+	case e.Message == "":
+		return fmt.Sprintf("115: error %d", e.Errno)
+	case e.Errno == 0:
+		return fmt.Sprintf("115: %s", e.Message)
+	}
+	return fmt.Sprintf("115: %s (errno %d)", e.Message, e.Errno)
+}
+
+// Err returns nil if State is true, otherwise an *Error.
 func (r *BaseResponse) Err() error {
 	if r.State {
 		return nil
 	}
-	msg := r.Message()
-	errno := r.GetErrno()
-	if msg == "" && errno == 0 {
-		return fmt.Errorf("115: request failed")
-	}
-	if msg == "" {
-		return fmt.Errorf("115: error %d", errno)
-	}
-	if errno == 0 {
-		return fmt.Errorf("115: %s", msg)
-	}
-	return fmt.Errorf("115: %s (errno %d)", msg, errno)
+	return &Error{Message: r.Message(), Errno: r.GetErrno()}
 }
 
 func parseErrno(v any) int64 {

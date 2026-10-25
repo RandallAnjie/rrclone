@@ -3,6 +3,7 @@ package _115
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,8 @@ import (
 	"github.com/rclone/rclone/backend/115/api"
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config/configmap"
+	"github.com/rclone/rclone/fs/fserrors"
+	"github.com/rclone/rclone/fs/object"
 )
 
 func TestParseCookies(t *testing.T) {
@@ -164,5 +167,70 @@ func TestPrecision(t *testing.T) {
 	var f Fs
 	if f.Precision() != fs.ModTimeNotSupported {
 		t.Fatal("expected modtime not supported")
+	}
+}
+
+// TestUpdateKeepsOldFileOnFailure checks that a failed upload doesn't
+// delete the object being replaced.
+func TestUpdateKeepsOldFileOnFailure(t *testing.T) {
+	deleted := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/files/index_info":
+			_, _ = io.WriteString(w, `{"state":true,"data":{}}`)
+		case r.URL.Path == "/files" && r.URL.Query().Get("cid") == "0":
+			_, _ = io.WriteString(w, `{"state":true,"count":1,"offset":0,"cid":"0","data":[{"fid":"20","cid":"0","n":"readme.txt","s":"9","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","pc":"pick1","te":"1700000001"}]}`)
+		case r.URL.Path == "/rb/delete":
+			deleted = true
+			_, _ = io.WriteString(w, `{"state":true}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"state":false,"error":"not found","errno":404}`)
+		}
+	}))
+	defer ts.Close()
+
+	ctx := context.Background()
+	fsi, err := NewFs(ctx, "test115", "", configmap.Simple{
+		"cookie":   "UID=u; CID=c; SEID=s; KID=k",
+		"endpoint": ts.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := fsi.(*Fs)
+	// Make the upload fail before anything is sent to 115
+	f.upload.once.Do(func() {})
+	f.upload.err = errors.New("upload failed")
+
+	obj, err := f.NewObject(ctx, "readme.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const content = "new content"
+	src := object.NewStaticObjectInfo("readme.txt", time.Now(), int64(len(content)), true, nil, nil)
+	err = obj.Update(ctx, strings.NewReader(content), src)
+	if err == nil {
+		t.Fatal("expected upload error")
+	}
+	if deleted {
+		t.Fatal("old file was deleted although the upload failed")
+	}
+}
+
+func TestShouldRetryErrno(t *testing.T) {
+	ctx := context.Background()
+	retry, err := shouldRetry(ctx, nil, (&api.BaseResponse{Errno: float64(rateLimitErrno)}).Err())
+	if !retry || err == nil {
+		t.Fatalf("rate limit: retry=%v err=%v", retry, err)
+	}
+	retry, err = shouldRetry(ctx, nil, (&api.BaseResponse{Errno: float64(99)}).Err())
+	if retry || !fserrors.IsFatalError(err) {
+		t.Fatalf("login errno: retry=%v err=%v", retry, err)
+	}
+	// errno 990002 used to match the "errno 99" substring and be fatal
+	retry, err = shouldRetry(ctx, nil, (&api.BaseResponse{Errno: float64(990002), Error: "login required for something"}).Err())
+	if fserrors.IsFatalError(err) {
+		t.Fatalf("errno 990002 should not be fatal: retry=%v err=%v", retry, err)
 	}
 }

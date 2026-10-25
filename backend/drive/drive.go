@@ -934,10 +934,7 @@ type Fs struct {
 	dirResourceKeys  *sync.Map                    // map directory ID to resource key
 	permissionsMu    *sync.Mutex                  // protect the below
 	permissions      map[string]*drive.Permission // map permission IDs to Permissions
-	saPool           *serviceAccountPool
-	oaPool           *serviceAccountPool // pool for regular OAuth account rotation
-	currentOAFile    string              // active oauth account file (empty = default account)
-	oaRotateMu       sync.Mutex          // serialize OAuth account rotation under concurrent rate-limit errors
+	rotator          *accountRotator              // non-nil if service account or OAuth account rotation is enabled
 }
 
 type serviceAccountPool struct {
@@ -945,8 +942,6 @@ type serviceAccountPool struct {
 	files     []string
 	cooldowns map[string]time.Time
 }
-
-var errNoServiceAccountAvailable = errors.New("no alternate service account available")
 
 func newServiceAccountPool(current string, extra []string) *serviceAccountPool {
 	seen := map[string]struct{}{}
@@ -1282,15 +1277,10 @@ func (f *Fs) shouldRetry(ctx context.Context, err error) (bool, error) {
 					fs.Infof(f, "%s", msg)
 				}
 			}
-			if shouldRotateServiceAccount(reason) {
-				if f.saPool != nil {
-					if rotateErr := f.rotateServiceAccount(ctx, reason, err); rotateErr == nil {
-						return true, err
-					}
-				} else if f.oaPool != nil {
-					if rotateErr := f.rotateOAuthAccount(ctx, reason, err); rotateErr == nil {
-						return true, err
-					}
+			// A full Shared Drive stays full whichever account writes to it
+			if f.rotator != nil && shouldRotateServiceAccount(reason) && (reason != "storageQuotaExceeded" || !f.isTeamDrive) {
+				if rotateErr := f.rotator.rotate(ctx, f, reason, err); rotateErr == nil {
+					return true, err
 				}
 			}
 			if reason == "rateLimitExceeded" || reason == "userRateLimitExceeded" {
@@ -1688,33 +1678,126 @@ func createOAuthClient(ctx context.Context, opt *Options, name string, m configm
 	return oAuthClient, nil
 }
 
-func (f *Fs) rotateServiceAccount(ctx context.Context, reason string, cause error) error {
-	if f.saPool == nil || f.opt.ServiceAccountCooldown <= 0 {
-		return errNoServiceAccountAvailable
+// accountHeader is added to every response passing through an
+// accountRotator so shouldRetry can tell which account served it.
+const accountHeader = "X-Rclone-Drive-Account"
+
+// accountState is the account an accountRotator currently uses
+type accountState struct {
+	client *http.Client
+	file   string
+	gen    uint64
+}
+
+// accountRotator is an http.RoundTripper which sends requests through
+// the currently active account.
+//
+// The Drive services are built once on top of it, so switching account
+// is a single atomic swap and never races with requests in flight.
+type accountRotator struct {
+	mu       sync.Mutex // serialises rotations
+	cur      atomic.Pointer[accountState]
+	pool     *serviceAccountPool
+	cooldown time.Duration
+	kind     string // "service account" or "OAuth account"
+	// newClient makes an authorised client for an account file
+	newClient func(ctx context.Context, file string) (*http.Client, error)
+}
+
+var errNoAccountAvailable = errors.New("no alternate account available")
+
+func newAccountRotator(kind string, pool *serviceAccountPool, cooldown time.Duration, file string, client *http.Client, newClient func(ctx context.Context, file string) (*http.Client, error)) *accountRotator {
+	r := &accountRotator{
+		pool:      pool,
+		cooldown:  cooldown,
+		kind:      kind,
+		newClient: newClient,
 	}
-	current := f.opt.ServiceAccountFile
-	candidates, wait := f.saPool.availableCandidates(current, time.Now(), time.Duration(f.opt.ServiceAccountCooldown))
-	if len(candidates) == 0 {
-		if wait > 0 {
-			fs.Debugf(f, "Service account %q hit %s, all alternates are cooling down for up to %v", current, reason, wait)
-		}
-		return errNoServiceAccountAvailable
+	r.cur.Store(&accountState{client: client, file: file, gen: 1})
+	return r
+}
+
+// RoundTrip implements http.RoundTripper
+func (r *accountRotator) RoundTrip(req *http.Request) (*http.Response, error) {
+	st := r.cur.Load()
+	transport := st.client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
 	}
-	var changeErr error
-	for _, candidate := range candidates {
-		changeErr = f.changeServiceAccountFile(ctx, candidate)
-		if changeErr == nil {
-			f.saPool.add(candidate)
-			fs.Infof(f, "Switched service account from %q to %q after Drive error %q", current, candidate, reason)
+	resp, err := transport.RoundTrip(req)
+	if resp != nil {
+		resp.Header.Set(accountHeader, strconv.FormatUint(st.gen, 10))
+	}
+	return resp, err
+}
+
+// current returns the active account file
+func (r *accountRotator) current() string {
+	return r.cur.Load().file
+}
+
+// rotate switches away from the account which produced cause.
+//
+// It returns nil if the request should be retried, either because a
+// new account is active or because another request already rotated
+// away from the failing account.
+func (r *accountRotator) rotate(ctx context.Context, f *Fs, reason string, cause error) error {
+	if r.cooldown <= 0 {
+		return errNoAccountAvailable
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	st := r.cur.Load()
+	var gerr *googleapi.Error
+	if errors.As(cause, &gerr) && gerr.Header != nil {
+		if gen, err := strconv.ParseUint(gerr.Header.Get(accountHeader), 10, 64); err == nil && gen != st.gen {
+			// Request was served by an account we've already left
+			fs.Debugf(f, "Drive error %q came from a previous %s, retrying with %q", reason, r.kind, formatAccountShort(st.file))
 			return nil
 		}
-		f.saPool.markCooldown(candidate, time.Now().Add(time.Duration(f.opt.ServiceAccountCooldown)))
-		fs.Errorf(f, "Failed to switch service account from %q to %q after %q: %v", current, candidate, reason, changeErr)
 	}
-	if changeErr == nil {
-		changeErr = cause
+
+	now := time.Now()
+	candidates, wait := r.pool.availableCandidates(st.file, now, r.cooldown)
+	if len(candidates) == 0 {
+		if wait > 0 {
+			fs.Infof(f, "Drive error %q on %s %q; all %d alternates are cooling down for up to %v; cooldowns=%s", reason, r.kind, formatAccountShort(st.file), r.pool.fileCount(), wait.Round(time.Second), formatCooldownSummary(r.pool.cooldownSnapshot(now)))
+		}
+		return errNoAccountAvailable
 	}
-	return changeErr
+	fs.Infof(f, "Drive error %q on %s %q; trying %d alternate account(s): %s", reason, r.kind, formatAccountShort(st.file), len(candidates), formatAccountList(candidates))
+	err := cause
+	for _, candidate := range candidates {
+		var client *http.Client
+		client, err = r.newClient(ctx, candidate)
+		if err == nil {
+			r.cur.Store(&accountState{client: client, file: candidate, gen: st.gen + 1})
+			r.pool.markCooldown(candidate, time.Time{})
+			fs.Infof(f, "Switched %s from %q to %q after Drive error %q", r.kind, formatAccountShort(st.file), formatAccountShort(candidate), reason)
+			return nil
+		}
+		r.pool.markCooldown(candidate, time.Now().Add(r.cooldown))
+		fs.Errorf(f, "Failed to switch %s from %q to %q after Drive error %q: %v", r.kind, formatAccountShort(st.file), formatAccountShort(candidate), reason, err)
+	}
+	return err
+}
+
+// switchTo makes file the active account
+func (r *accountRotator) switchTo(ctx context.Context, file string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st := r.cur.Load()
+	if file == st.file {
+		return nil
+	}
+	client, err := r.newClient(ctx, file)
+	if err != nil {
+		return err
+	}
+	r.pool.add(file)
+	r.cur.Store(&accountState{client: client, file: file, gen: st.gen + 1})
+	return nil
 }
 
 // oauthAccountFileData holds the contents of a structured OAuth account file.
@@ -1860,8 +1943,6 @@ func (m *tokenFileMapper) Set(key, value string) {
 	}
 }
 
-var errNoOAuthAccountAvailable = errors.New("no alternate OAuth account available")
-
 // parseOAuthAccountFiles expands the spec the same way as parseServiceAccountFiles
 // but accepts any file type (not only .json extension filtering is needed for
 // directory expansion).
@@ -1928,89 +2009,31 @@ func expandOAuthAccountSpec(spec string) ([]string, error) {
 	return files, nil
 }
 
-func (f *Fs) rotateOAuthAccount(ctx context.Context, reason string, cause error) error {
-	if f.oaPool == nil || f.opt.OAuthAccountCooldown <= 0 {
-		return errNoOAuthAccountAvailable
+// newServiceAccountClient makes a client for the service account in file
+func (f *Fs) newServiceAccountClient(ctx context.Context, file string) (*http.Client, error) {
+	opt := f.opt
+	opt.ServiceAccountFile = file
+	opt.ServiceAccountCredentials = ""
+	client, err := createOAuthClient(ctx, &opt, f.name, f.m)
+	if err != nil {
+		return nil, fmt.Errorf("drive: failed when making oauth client from service account file %q: %w", file, err)
 	}
-	f.oaRotateMu.Lock()
-	defer f.oaRotateMu.Unlock()
-
-	current := f.currentOAFile
-	now := time.Now()
-	candidates, wait := f.oaPool.availableCandidates(current, now, time.Duration(f.opt.OAuthAccountCooldown))
-	if len(candidates) == 0 {
-		snapshot := formatCooldownSummary(f.oaPool.cooldownSnapshot(time.Now()))
-		if wait > 0 {
-			fs.Infof(f, "Drive error %q on OAuth account %q; all %d alternates are cooling down for up to %v; cooldowns=%s", reason, formatAccountShort(current), f.oaPool.fileCount(), wait.Round(time.Second), snapshot)
-		}
-		return errNoOAuthAccountAvailable
-	}
-
-	fs.Infof(f, "Drive error %q on OAuth account %q; trying %d alternate account(s): %s", reason, formatAccountShort(current), len(candidates), formatAccountList(candidates))
-
-	var changeErr error
-	for _, candidate := range candidates {
-		changeErr = f.changeOAuthAccountFile(ctx, candidate)
-		if changeErr == nil {
-			f.oaPool.add(candidate)
-			fs.Infof(f, "Switched OAuth account from %q to %q after Drive error %q", formatAccountShort(current), formatAccountShort(candidate), reason)
-			return nil
-		}
-		f.oaPool.markCooldown(candidate, time.Now().Add(time.Duration(f.opt.OAuthAccountCooldown)))
-		fs.Infof(f, "Failed switching OAuth account from %q to %q after Drive error %q: %v", formatAccountShort(current), formatAccountShort(candidate), reason, changeErr)
-	}
-	if changeErr == nil {
-		changeErr = cause
-	}
-	return changeErr
+	return client, nil
 }
 
-func (f *Fs) changeOAuthAccountFile(ctx context.Context, file string) (err error) {
-	fs.Infof(f, "Changing OAuth account from %q to %q", formatAccountShort(f.currentOAFile), formatAccountShort(file))
-	if file == f.currentOAFile {
-		return nil
-	}
-	oldSvc := f.svc
-	oldv2Svc := f.v2Svc
-	oldOAuthClient := f.client
-	oldFile := f.currentOAFile
-	defer func() {
-		if err != nil {
-			f.svc = oldSvc
-			f.v2Svc = oldv2Svc
-			f.client = oldOAuthClient
-			f.currentOAFile = oldFile
-		}
-	}()
-	f.currentOAFile = file
+// newOAuthAccountClient makes a client for the OAuth token in file
+func (f *Fs) newOAuthAccountClient(ctx context.Context, file string) (*http.Client, error) {
 	m := &tokenFileMapper{base: f.m, file: file}
-	oAuthClient, ts, err := oauthutil.NewClientWithBaseClient(ctx, f.name, m, driveConfig, getClient(ctx, &f.opt))
+	client, ts, err := oauthutil.NewClientWithBaseClient(ctx, f.name, m, driveConfig, getClient(ctx, &f.opt))
 	if err != nil {
-		return fmt.Errorf("drive: failed when making oauth client from account file %q: %w", file, err)
+		return nil, fmt.Errorf("drive: failed when making oauth client from account file %q: %w", file, err)
 	}
-	// Verify the token is usable (e.g. refresh_token is valid) before
-	// committing to this account.  A failure here lets the caller try the
-	// next candidate rather than discovering the problem on the first real
-	// API call.
-	if _, tokenErr := ts.Token(); tokenErr != nil {
-		return fmt.Errorf("drive: token validation failed for account file %q: %w", file, tokenErr)
+	// Check the token is usable (e.g. refresh_token is valid) before
+	// committing to this account so the caller can try the next one.
+	if _, err := ts.Token(); err != nil {
+		return nil, fmt.Errorf("drive: token validation failed for account file %q: %w", file, err)
 	}
-	f.client = oAuthClient
-	f.svc, err = drive.NewService(context.Background(), f.driveClientOptions()...)
-	if err != nil {
-		return fmt.Errorf("couldn't create Drive client: %w", err)
-	}
-	if f.opt.V2DownloadMinSize >= 0 {
-		f.v2Svc, err = drive_v2.NewService(context.Background(), f.driveClientOptionsFor("v2")...)
-		if err != nil {
-			return fmt.Errorf("couldn't create Drive v2 client: %w", err)
-		}
-	}
-	if f.oaPool != nil {
-		f.oaPool.add(file)
-		f.oaPool.markCooldown(file, time.Time{})
-	}
-	return nil
+	return client, nil
 }
 
 func checkUploadChunkSize(cs fs.SizeSuffix) error {
@@ -2106,9 +2129,6 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 		dirResourceKeys: new(sync.Map),
 		permissionsMu:   new(sync.Mutex),
 		permissions:     make(map[string]*drive.Permission),
-		saPool:          newServiceAccountPool(opt.ServiceAccountFile, serviceAccountFiles),
-		oaPool:          newServiceAccountPool("", oauthAccountFiles),
-		currentOAFile:   currentOAuthAccountFile,
 	}
 	f.isTeamDrive = opt.TeamDriveID != ""
 	f.features = (&fs.Features{
@@ -2128,8 +2148,18 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 		DirModTimeUpdatesOnWrite: false, // FIXME need to check!
 	}).Fill(ctx, f)
 
+	// Set up account rotation if more than one account is available
+	if pool := newServiceAccountPool(opt.ServiceAccountFile, serviceAccountFiles); opt.ServiceAccountCredentials == "" && pool.fileCount() > 1 {
+		f.rotator = newAccountRotator("service account", pool, time.Duration(opt.ServiceAccountCooldown), opt.ServiceAccountFile, oAuthClient, f.newServiceAccountClient)
+	} else if currentOAuthAccountFile != "" && len(oauthAccountFiles) > 1 {
+		f.rotator = newAccountRotator("OAuth account", newServiceAccountPool("", oauthAccountFiles), time.Duration(opt.OAuthAccountCooldown), currentOAuthAccountFile, oAuthClient, f.newOAuthAccountClient)
+	}
+
 	// Create a new authorized Drive client.
 	f.client = oAuthClient
+	if f.rotator != nil {
+		f.client = &http.Client{Transport: f.rotator}
+	}
 	f.svc, err = drive.NewService(context.Background(), f.driveClientOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't create Drive client: %w", err)
@@ -4107,6 +4137,14 @@ func (f *Fs) changeChunkSize(chunkSizeString string) (err error) {
 
 func (f *Fs) changeServiceAccountFile(ctx context.Context, file string) (err error) {
 	fs.Debugf(nil, "Changing Service Account File from %s to %s", f.opt.ServiceAccountFile, file)
+	if f.rotator != nil && f.rotator.kind == "service account" {
+		if err := f.rotator.switchTo(ctx, file); err != nil {
+			return err
+		}
+		f.opt.ServiceAccountFile = file
+		f.opt.ServiceAccountCredentials = ""
+		return nil
+	}
 	if file == f.opt.ServiceAccountFile {
 		return nil
 	}
@@ -4141,10 +4179,6 @@ func (f *Fs) changeServiceAccountFile(ctx context.Context, file string) (err err
 		if err != nil {
 			return fmt.Errorf("couldn't create Drive v2 client: %w", err)
 		}
-	}
-	if f.saPool != nil {
-		f.saPool.add(file)
-		f.saPool.markCooldown(file, time.Time{})
 	}
 	return nil
 }

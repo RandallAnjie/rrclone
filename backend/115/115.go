@@ -282,17 +282,17 @@ func shouldRetry(ctx context.Context, resp *http.Response, err error) (bool, err
 	if fserrors.ContextError(ctx, &err) {
 		return false, err
 	}
-	if err != nil {
-		msg := err.Error()
-		if strings.Contains(msg, "errno 990009") || strings.Contains(msg, fmt.Sprintf("errno %d", rateLimitErrno)) {
+	var apiErr *api.Error
+	if errors.As(err, &apiErr) {
+		if isRetryErrno(apiErr.Errno) {
 			return true, err
 		}
-		if strings.Contains(msg, "errno 99") || strings.Contains(msg, "login") {
+		if isLoginErrno(apiErr.Errno) {
 			return false, fserrors.FatalError(err)
 		}
 	}
 	if resp != nil && resp.StatusCode == http.StatusForbidden {
-		time.Sleep(time.Second)
+		// 115 uses 403 for temporary throttling; let the pacer back off
 		return true, err
 	}
 	return fserrors.ShouldRetry(err) || fserrors.ShouldRetryHTTP(resp, retryErrorCodes), err

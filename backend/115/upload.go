@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/hash"
 	"github.com/rclone/rclone/lib/multipart"
+	"github.com/rclone/rclone/lib/random"
 	"github.com/rclone/rclone/lib/readers"
 	"github.com/rclone/rclone/lib/rest"
 )
@@ -321,7 +323,7 @@ func (f *Fs) putOSS(ctx context.Context, init *api.UploadInitResponse, rs io.Rea
 		},
 	}
 	var resp *http.Response
-	err = f.pacer.CallNoRetry(func() (bool, error) {
+	err = f.pacer.Call(func() (bool, error) {
 		resp, err = f.oss.Call(ctx, &opts)
 		return shouldRetry(ctx, resp, err)
 	})
@@ -344,22 +346,26 @@ func (f *Fs) putOSS(ctx context.Context, init *api.UploadInitResponse, rs io.Rea
 	return nil
 }
 
+// ossPutObjectLimit is the largest object Aliyun OSS accepts in a single PutObject call
+const ossPutObjectLimit = 5 << 30
+
 // Update uploads to the remote path, replacing any existing object
+//
+// The new content is uploaded under a temporary name first. The old
+// object is only removed once the upload has succeeded, so a failed
+// upload leaves the existing file untouched.
 func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) error {
 	_ = options
 	size := src.Size()
 	if size == 0 {
 		return fs.ErrorCantUploadEmptyFiles
 	}
+	if size > ossPutObjectLimit {
+		return fmt.Errorf("115: files larger than %v are not supported yet (single OSS PUT limit)", fs.SizeSuffix(ossPutObjectLimit))
+	}
 	leaf, dirID, err := o.fs.dirCache.FindPath(ctx, o.remote, true)
 	if err != nil {
 		return err
-	}
-	if o.id != "" {
-		_ = o.fs.deleteIDs(ctx, o.id, dirID)
-		o.id = ""
-	} else if existing, err := o.fs.NewObject(ctx, o.remote); err == nil {
-		_ = existing.Remove(ctx)
 	}
 
 	srcUpload, err := o.fs.prepareUpload(in, size)
@@ -367,6 +373,9 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		return err
 	}
 	defer srcUpload.Close()
+	if srcUpload.digest.Size > ossPutObjectLimit {
+		return fmt.Errorf("115: files larger than %v are not supported yet (single OSS PUT limit)", fs.SizeSuffix(ossPutObjectLimit))
+	}
 
 	if srcHash, err := src.Hash(ctx, hash.SHA1); err == nil && srcHash != "" {
 		if !strings.EqualFold(srcHash, srcUpload.digest.QuickID) {
@@ -374,7 +383,22 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		}
 	}
 
-	init, err := o.fs.initUpload(ctx, dirID, o.fs.opt.Enc.FromStandardName(leaf), srcUpload.digest, srcUpload.rs)
+	// Find the object being replaced, if any
+	oldID := o.id
+	if oldID == "" {
+		if existing, err := o.fs.NewObject(ctx, o.remote); err == nil {
+			oldID = existing.(*Object).id
+		} else if !errors.Is(err, fs.ErrorObjectNotFound) {
+			return err
+		}
+	}
+
+	uploadLeaf := leaf
+	if oldID != "" {
+		uploadLeaf = ".rclone-upload-" + random.String(8) + "-" + leaf
+	}
+
+	init, err := o.fs.initUpload(ctx, dirID, o.fs.opt.Enc.FromStandardName(uploadLeaf), srcUpload.digest, srcUpload.rs)
 	if err != nil {
 		return err
 	}
@@ -397,13 +421,48 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	}
 
 	o.fs.dirCache.FlushDir(path.Dir(o.remote))
-	var info *api.FileInfo
-	for i := 0; i < 8; i++ {
-		info, err = o.fs.findInDir(ctx, dirID, leaf, srcUpload.digest.QuickID)
-		if err == nil {
-			return o.setMetaData(info)
-		}
-		time.Sleep(250 * time.Millisecond)
+	info, err := o.fs.waitForUpload(ctx, dirID, uploadLeaf, srcUpload.digest.QuickID)
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("upload completed but file not listed yet: %w", err)
+
+	if oldID != "" {
+		newID := info.ID()
+		if err := o.fs.deleteIDs(ctx, oldID, dirID); err != nil {
+			if rmErr := o.fs.deleteIDs(ctx, newID, dirID); rmErr != nil {
+				fs.Errorf(o, "failed to remove temporary upload %q: %v", uploadLeaf, rmErr)
+			}
+			return fmt.Errorf("115: failed to remove old version: %w", err)
+		}
+		if err := o.fs.rename(ctx, newID, leaf); err != nil {
+			return fmt.Errorf("115: uploaded as %q but rename to %q failed: %w", uploadLeaf, leaf, err)
+		}
+		o.fs.dirCache.FlushDir(path.Dir(o.remote))
+		info, err = o.fs.waitForUpload(ctx, dirID, leaf, srcUpload.digest.QuickID)
+		if err != nil {
+			return err
+		}
+	}
+	return o.setMetaData(info)
+}
+
+// waitForUpload polls dirID until a file called name with sha1sum is listed
+func (f *Fs) waitForUpload(ctx context.Context, dirID, name, sha1sum string) (info *api.FileInfo, err error) {
+	sleep := 250 * time.Millisecond
+	for range 10 {
+		info, err = f.findInDir(ctx, dirID, name, sha1sum)
+		if err == nil {
+			return info, nil
+		}
+		if !errors.Is(err, fs.ErrorObjectNotFound) {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(sleep):
+		}
+		sleep = min(2*sleep, 4*time.Second)
+	}
+	return nil, fmt.Errorf("upload completed but file not listed yet: %w", err)
 }

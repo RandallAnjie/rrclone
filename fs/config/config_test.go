@@ -69,3 +69,22 @@ func TestCreateRemoteEphemeralConfigKeysReachBackend(t *testing.T) {
 	assert.Equal(t, "", config.GetValue("eph", "config_template_file"))
 	assert.Equal(t, "", config.GetValue("eph", "config_template"))
 }
+
+func TestGetRemotesDedupesLegacyEnv(t *testing.T) {
+	t.Setenv("RCLONE_CONFIG_DUPENVREMOTE_TYPE", "memory")
+	t.Setenv("RRCLONE_CONFIG_DUPENVREMOTE_TYPE", "local")
+	var found []config.Remote
+	for _, remote := range config.GetRemotes() {
+		if remote.Name == "dupenvremote" {
+			found = append(found, remote)
+		}
+	}
+	require.Len(t, found, 1)
+	assert.Equal(t, "local", found[0].Type)
+	assert.Equal(t, "environment", found[0].Source)
+}
+
+func TestGetValueLegacyEnv(t *testing.T) {
+	t.Setenv("RCLONE_CONFIG_LEGACYVALREMOTE_TYPE", "memory")
+	assert.Equal(t, "memory", config.GetValue("legacyvalremote", "type"))
+}

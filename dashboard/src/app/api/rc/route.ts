@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isAllowedTarget, isSameOrigin, parseAllowedHosts } from "@/lib/rc/allowlist";
 import { normalizeHostUrl } from "@/lib/rc/format";
 
 type RcRequest = {
@@ -12,6 +13,10 @@ type RcRequest = {
 const RC_PATH = /^[A-Za-z0-9][A-Za-z0-9_/-]*$/;
 
 export async function POST(request: Request) {
+  if (!isSameOrigin(request.headers.get("origin"), request.headers.get("host"))) {
+    return NextResponse.json({ error: "拒绝跨站请求" }, { status: 403 });
+  }
+
   let body: RcRequest;
   try {
     body = (await request.json()) as RcRequest;
@@ -30,6 +35,13 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "非法主机地址" },
       { status: 400 },
+    );
+  }
+
+  if (!isAllowedTarget(new URL(base), parseAllowedHosts(process.env.RRCLONE_DASHBOARD_ALLOWED_HOSTS))) {
+    return NextResponse.json(
+      { error: "该主机不在 RRCLONE_DASHBOARD_ALLOWED_HOSTS 白名单里（默认只允许本机）" },
+      { status: 403 },
     );
   }
 

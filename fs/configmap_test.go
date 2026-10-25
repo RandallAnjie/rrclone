@@ -91,3 +91,19 @@ func TestOptionEnvVarsRedactsPassword(t *testing.T) {
 	assert.Equal(t, "obscured_pass", value)
 	assert.NotContains(t, buf.String(), "obscured_pass")
 }
+
+func TestLookupEnvLegacyFallback(t *testing.T) {
+	t.Setenv("RCLONE_TEST_LEGACY_ONLY", "legacy")
+	value, ok := LookupEnv("RRCLONE_TEST_LEGACY_ONLY")
+	assert.True(t, ok)
+	assert.Equal(t, "legacy", value)
+
+	t.Setenv("RRCLONE_TEST_LEGACY_BOTH", "new")
+	t.Setenv("RCLONE_TEST_LEGACY_BOTH", "legacy")
+	value, ok = LookupEnv("RRCLONE_TEST_LEGACY_BOTH")
+	assert.True(t, ok)
+	assert.Equal(t, "new", value)
+
+	_, ok = LookupEnv("RRCLONE_TEST_LEGACY_UNSET")
+	assert.False(t, ok)
+}

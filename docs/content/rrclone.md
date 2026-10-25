@@ -23,6 +23,7 @@ rrclone 是 [rclone](https://rclone.org) 的增强分支。命令、后端和官
 | 环境变量 | 只有 `RCLONE_*` | 先读 `RRCLONE_*`，没有再读 `RCLONE_*` |
 | Google / Dropbox 等官方 API 被墙 | 只能改 OAuth 的 `auth_url` / `token_url`，数据面主机仍写死 | 再加 `endpoint`（以及 Dropbox / Box 的上传主机）走反代 |
 | 115 网盘 | 无 | 用浏览器 cookie 走 web API，不用已停的 OpenAPI |
+| Google 被 DNS 污染 / 封锁 | 只能挂代理 | `--drive-direct` 扫描可直连的 Google IP，Drive 流量直接连过去（gdirect 模式） |
 | Google Drive 多 OAuth 账号轮换 | 无 | `--drive-oauth-account-files`，quota / 限流 / `authError` 自动切号 |
 | 本机状态看板 | 无独立 UI | `dashboard/` Next.js，读官方 RC |
 | 一键安装 | `rclone.org/install.sh` | 本仓库 `install.sh`，默认装 `rrclone` 并可选替换 `rclone` 命令 |
@@ -42,6 +43,7 @@ rrclone 是 [rclone](https://rclone.org) 的增强分支。命令、后端和官
 本分支额外：
 
 - **自定义 API**：官方域名不通时，把请求打到你自己的反代，见下面 [URL 怎么换](#自定义-apiurl-怎么换)
+- **Drive 直连**：扫描能连通的 Google IP，Drive API 和上传下载直连，证书仍按真实域名校验，见 [Direct connection](/drive/#direct-connection-to-google-ips)
 - **115 Drive**：浏览器 cookie 登录，列表 / 上传 / 下载 / 秒传，见 [115](/115/)
 - **Drive 多账号**：多个 OAuth token 文件轮换，适合大量上传和挂载，见 [Drive OAuth account rotation](/drive/#oauth-account-rotation)
 - **看板**：传输、远程、任务、挂载、多主机 RC 地址

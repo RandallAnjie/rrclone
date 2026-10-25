@@ -829,6 +829,58 @@ https://accounts.google.com/o/oauth2/auth.`,
 				Help:  "Reverse proxy for www.googleapis.com",
 			}},
 		}, {
+			Name: "direct",
+			Help: `Connect to Google Drive through scanned Google IPs (gdirect mode).
+
+When enabled, rclone probes candidate Google front-end IPs with a real
+Drive API request and dials the fastest working ones for the Drive hosts
+(www.googleapis.com, drive.google.com, drive.usercontent.google.com,
+*.googleusercontent.com). The HTTP proxy is bypassed for those hosts, and
+TLS is still verified against the real hostname.
+
+Token refresh (oauth2.googleapis.com) uses the normal network, so it may
+still need a proxy or token_url.
+
+Results are cached in the rclone cache directory and reused for
+direct_rescan. If no IP works, rclone falls back to the normal network.
+
+Inspired by https://github.com/mizorewww/gdirect.`,
+			Default:  false,
+			Advanced: true,
+		}, {
+			Name: "direct_ips",
+			Help: `Candidate Google IPs to probe in direct mode.
+
+Comma separated. When set, only these IPs are probed. When blank, rclone
+probes a built-in seed IP, the system DNS answers for the Drive hosts and
+every IP that worked before.
+
+If a TUN proxy or VPN is running, set these IPs to DIRECT and exclude
+them from fake-ip, or every probe will fail.`,
+			Default:  fs.CommaSepList{},
+			Advanced: true,
+		}, {
+			Name: "direct_sni",
+			Help: `TLS SNI to send to Drive hosts in direct mode.
+
+Leave blank to send the real hostname. Set a hostname to send that
+instead, or "off" to send no SNI. The certificate is always verified
+against the real hostname.`,
+			Default:  "",
+			Advanced: true,
+			Examples: []fs.OptionExample{{
+				Value: "",
+				Help:  "Send the real hostname",
+			}, {
+				Value: "off",
+				Help:  "Send no SNI",
+			}},
+		}, {
+			Name:     "direct_rescan",
+			Help:     "How long direct mode trusts a scan before probing again.",
+			Default:  fs.Duration(24 * time.Hour),
+			Advanced: true,
+		}, {
 			Name:     "env_auth",
 			Help:     "Get IAM credentials from runtime (environment variables or instance meta data if no env vars).\n\nOnly applies if service_account_file and service_account_credentials is blank.",
 			Default:  false,
@@ -908,6 +960,10 @@ type Options struct {
 	Enc                       encoder.MultiEncoder `config:"encoding"`
 	EnvAuth                   bool                 `config:"env_auth"`
 	Endpoint                  string               `config:"endpoint"`
+	Direct                    bool                 `config:"direct"`
+	DirectIPs                 fs.CommaSepList      `config:"direct_ips"`
+	DirectSNI                 string               `config:"direct_sni"`
+	DirectRescan              fs.Duration          `config:"direct_rescan"`
 }
 
 // Fs represents a remote drive server
@@ -1618,6 +1674,9 @@ func getClient(ctx context.Context, opt *Options) *http.Client {
 	t := fshttp.NewTransportCustom(ctx, func(t *http.Transport) {
 		if opt.DisableHTTP2 {
 			t.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+		}
+		if opt.Direct {
+			applyDirect(t, opt)
 		}
 	})
 	return &http.Client{
@@ -4722,6 +4781,25 @@ Third delete all orphaned files to the trash:
 ` + "```console" + `
 rclone backend rescue drive: -o delete
 ` + "```",
+}, {
+	Name:  "direct",
+	Short: "Show or refresh the Google IPs used by direct mode.",
+	Long: `This command shows the cached probe results for direct mode (the
+direct option): every candidate IP, its latency and the last error.
+
+Usage examples:
+
+` + "```console" + `
+rclone backend direct drive:
+rclone backend direct drive: -o scan
+rclone backend direct drive: -o scan --drive-direct-ips 142.250.1.1,142.250.1.2
+` + "```" + `
+
+With -o scan it probes the candidates now and saves the result, even if
+direct mode is off, so you can check which IPs work before enabling it.`,
+	Opts: map[string]string{
+		"scan": "Probe the candidate IPs now",
+	},
 }}
 
 // Command the backend to run a named command
@@ -4849,6 +4927,8 @@ func (f *Fs) Command(ctx context.Context, name string, arg []string, opt map[str
 			return results, nil
 		}
 		return nil, errors.New("need a query argument")
+	case "direct":
+		return f.directCommand(ctx, opt)
 	case "rescue":
 		dirID := ""
 		_, delete := opt["delete"]

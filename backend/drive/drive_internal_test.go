@@ -362,6 +362,85 @@ func TestServiceAccountPoolAvailableCandidates(t *testing.T) {
 	assert.InDelta(t, float64(7*time.Minute), float64(wait), float64(2*time.Second))
 }
 
+type headerTransport string
+
+func (h headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"X-Account": {string(h)}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+}
+
+func newTestRotator(t *testing.T, switches *atomic.Int32) *accountRotator {
+	pool := newServiceAccountPool("a.json", []string{"b.json", "c.json", "d.json"})
+	newClient := func(ctx context.Context, file string) (*http.Client, error) {
+		switches.Add(1)
+		return &http.Client{Transport: headerTransport(file)}, nil
+	}
+	return newAccountRotator("service account", pool, time.Minute, "a.json", &http.Client{Transport: headerTransport("a.json")}, newClient)
+}
+
+func quotaErrorFrom(t *testing.T, r *accountRotator) error {
+	resp, err := r.RoundTrip(httptest.NewRequest("GET", "http://example.com/", nil))
+	require.NoError(t, err)
+	return &googleapi.Error{Code: 403, Header: resp.Header, Errors: []googleapi.ErrorItem{{Reason: "userRateLimitExceeded"}}}
+}
+
+func TestAccountRotatorRoundTrip(t *testing.T) {
+	var switches atomic.Int32
+	r := newTestRotator(t, &switches)
+	f := &Fs{}
+
+	resp, err := r.RoundTrip(httptest.NewRequest("GET", "http://example.com/", nil))
+	require.NoError(t, err)
+	assert.Equal(t, "a.json", resp.Header.Get("X-Account"))
+	assert.Equal(t, "1", resp.Header.Get(accountHeader))
+
+	require.NoError(t, r.rotate(context.Background(), f, "userRateLimitExceeded", quotaErrorFrom(t, r)))
+	resp, err = r.RoundTrip(httptest.NewRequest("GET", "http://example.com/", nil))
+	require.NoError(t, err)
+	assert.Equal(t, "b.json", resp.Header.Get("X-Account"))
+	assert.Equal(t, "2", resp.Header.Get(accountHeader))
+	assert.Equal(t, "b.json", r.current())
+}
+
+// A burst of errors from the same account must only rotate once
+func TestAccountRotatorBurstRotatesOnce(t *testing.T) {
+	var switches atomic.Int32
+	r := newTestRotator(t, &switches)
+	f := &Fs{}
+
+	const n = 20
+	errs := make([]error, n)
+	for i := range errs {
+		errs[i] = quotaErrorFrom(t, r)
+	}
+	var wg stdsync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			assert.NoError(t, r.rotate(context.Background(), f, "userRateLimitExceeded", errs[i]))
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, int32(1), switches.Load())
+	assert.Equal(t, "b.json", r.current())
+
+	// A fresh error from the new account rotates again
+	require.NoError(t, r.rotate(context.Background(), f, "userRateLimitExceeded", quotaErrorFrom(t, r)))
+	assert.Equal(t, int32(2), switches.Load())
+	assert.Equal(t, "c.json", r.current())
+}
+
+func TestAccountRotatorExhausted(t *testing.T) {
+	var switches atomic.Int32
+	r := newTestRotator(t, &switches)
+	f := &Fs{}
+	for range 3 {
+		require.NoError(t, r.rotate(context.Background(), f, "userRateLimitExceeded", quotaErrorFrom(t, r)))
+	}
+	assert.Equal(t, "d.json", r.current())
+	assert.ErrorIs(t, r.rotate(context.Background(), f, "userRateLimitExceeded", quotaErrorFrom(t, r)), errNoAccountAvailable)
+}
+
 /*
 var additionalMimeTypes = map[string]string{
 	"application/vnd.ms-excel.sheet.macroenabled.12":                          ".xlsm",

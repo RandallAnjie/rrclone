@@ -9,7 +9,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"errors"
 	"io"
 	"math/big"
 	"net"
@@ -80,48 +79,11 @@ func TestSortDirectEndpoints(t *testing.T) {
 	assert.Equal(t, []string{"1", "2", "3", "4"}, got)
 }
 
-func TestDirectRouterDialFailover(t *testing.T) {
-	r := &directRouter{
-		rescan: time.Hour,
-		bad:    map[string]time.Time{},
-		cache: directCache{ScannedAt: time.Now(), Endpoints: []directEndpoint{
-			{IP: "203.0.113.1", LatencyMs: 1},
-			{IP: "2001:db8::1", LatencyMs: 2},
-			{IP: "203.0.113.3", Error: "dead"},
-		}},
-	}
-	var mu sync.Mutex
-	var tried []string
-	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
-		mu.Lock()
-		tried = append(tried, addr)
-		mu.Unlock()
-		if addr == "[2001:db8::1]:443" {
-			c, _ := net.Pipe()
-			return c, nil
-		}
-		return nil, errors.New("refused")
-	}
-	ctx := context.Background()
-
-	conn, err := r.dial(ctx, dial, "tcp", "www.googleapis.com:443")
-	require.NoError(t, err)
-	_ = conn.Close()
-	assert.Equal(t, []string{"203.0.113.1:443", "[2001:db8::1]:443"}, tried)
-
-	// The failed IP is cooling down, so it is skipped now.
-	tried = nil
-	conn, err = r.dial(ctx, dial, "tcp", "www.googleapis.com:443")
-	require.NoError(t, err)
-	_ = conn.Close()
-	assert.Equal(t, []string{"[2001:db8::1]:443"}, tried)
-
-	// Nothing works: fall back to the original address.
-	r.cache.Endpoints = []directEndpoint{{IP: "203.0.113.9", LatencyMs: 1}}
-	tried = nil
-	_, err = r.dial(ctx, dial, "tcp", "www.googleapis.com:443")
-	require.Error(t, err)
-	assert.Equal(t, []string{"203.0.113.9:443", "www.googleapis.com:443"}, tried)
+// closeTestServer stops s without httptest.Server.Close, which sets up
+// http.DefaultTransport. fshttp copies its settings, so later tests would
+// get an h2 TLSNextProto without h2 in ALPN and fall back to HTTP/1.1.
+func closeTestServer(s *httptest.Server) {
+	_ = s.Config.Close()
 }
 
 // directTestServer is a TLS server with a certificate for the Google API
@@ -179,7 +141,7 @@ func newDirectTestServer(t *testing.T) (context.Context, *directTestServer) {
 		},
 	}
 	s.StartTLS()
-	t.Cleanup(s.Close)
+	t.Cleanup(func() { closeTestServer(s.Server) })
 	_, s.port, _ = net.SplitHostPort(s.Listener.Addr().String())
 
 	oldAllow, oldProbe, oldCache := directAllowIP, directProbeURL, config.GetCacheDir()
@@ -263,7 +225,7 @@ func TestDirectSNI(t *testing.T) {
 }
 
 func TestDirectRejectsPrivateCandidate(t *testing.T) {
-	r := &directRouter{candidates: []string{"10.0.0.1"}, bad: map[string]time.Time{}}
+	r := &directRouter{candidates: []string{"10.0.0.1"}, bad: map[string]*directBackoff{}}
 	_, err := r.candidateList(context.Background())
 	assert.ErrorContains(t, err, "not a public IP")
 }

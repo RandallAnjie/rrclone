@@ -841,8 +841,13 @@ TLS is still verified against the real hostname.
 Token refresh (oauth2.googleapis.com) uses the normal network, so it may
 still need a proxy or token_url.
 
+If endpoint is set, it is kept as one of the paths: each request goes
+through the fastest of the best scanned IPs and the endpoint (see
+direct_speedtest), and fails over to the next one when a path errors or
+stalls. Without endpoint the normal network is the last resort.
+
 Results are cached in the rclone cache directory and reused for
-direct_rescan. If no IP works, rclone falls back to the normal network.
+direct_rescan.
 
 Inspired by https://github.com/mizorewww/gdirect.`,
 			Default:  false,
@@ -879,6 +884,34 @@ against the real hostname.`,
 			Name:     "direct_rescan",
 			Help:     "How long direct mode trusts a scan before probing again.",
 			Default:  fs.Duration(24 * time.Hour),
+			Advanced: true,
+		}, {
+			Name: "direct_speedtest",
+			Help: `How much data the direct mode speed test sends each way per path.
+
+Direct mode uses the fastest scanned IPs and the normal path (the
+endpoint option when set, otherwise the normal network) as paths. While
+files are transferring, a background speed test downloads part of the
+largest file on the remote and uploads this much to an upload session it
+then cancels, through every path in turn. Downloads and uploads then use
+the fastest path for each, which may differ.
+
+Set to 0 to disable it; paths are then ranked by probe latency.`,
+			Default:  fs.SizeSuffix(4 * 1024 * 1024),
+			Advanced: true,
+		}, {
+			Name:     "direct_speedtest_interval",
+			Help:     "How often direct mode repeats the speed test while transferring.",
+			Default:  fs.Duration(time.Hour),
+			Advanced: true,
+		}, {
+			Name: "direct_stall_timeout",
+			Help: `Abandon a direct mode download that receives nothing for this long.
+
+The path it was using is avoided for a while (1 minute, doubling up to
+30 minutes while it keeps failing) and the transfer is retried on the next
+path. Set to 0 to disable.`,
+			Default:  fs.Duration(30 * time.Second),
 			Advanced: true,
 		}, {
 			Name:     "env_auth",
@@ -964,6 +997,9 @@ type Options struct {
 	DirectIPs                 fs.CommaSepList      `config:"direct_ips"`
 	DirectSNI                 string               `config:"direct_sni"`
 	DirectRescan              fs.Duration          `config:"direct_rescan"`
+	DirectSpeedTest           fs.SizeSuffix        `config:"direct_speedtest"`
+	DirectSpeedTestInterval   fs.Duration          `config:"direct_speedtest_interval"`
+	DirectStallTimeout        fs.Duration          `config:"direct_stall_timeout"`
 }
 
 // Fs represents a remote drive server
@@ -1661,14 +1697,15 @@ func parseExtensions(extensionsIn ...string) (extensions, mimeTypes []string, er
 
 // getClient makes an http client according to the options
 func getClient(ctx context.Context, opt *Options) *http.Client {
-	t := fshttp.NewTransportCustom(ctx, func(t *http.Transport) {
+	customize := func(t *http.Transport) {
 		if opt.DisableHTTP2 {
 			t.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
 		}
-		if opt.Direct {
-			applyDirect(t, opt)
-		}
-	})
+	}
+	var t http.RoundTripper = fshttp.NewTransportCustom(ctx, customize)
+	if opt.Direct {
+		t = newDirectTransport(ctx, opt, t, customize)
+	}
 	return &http.Client{
 		Transport: t,
 	}
@@ -2222,6 +2259,9 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 	f.svc, err = drive.NewService(context.Background(), f.driveClientOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't create Drive client: %w", err)
+	}
+	if opt.Direct {
+		getDirectRouter(opt).setSpeedFs(f)
 	}
 
 	if f.opt.V2DownloadMinSize >= 0 {
@@ -4818,8 +4858,9 @@ rclone backend rescue drive: -o delete
 }, {
 	Name:  "direct",
 	Short: "Show or refresh the Google IPs used by direct mode.",
-	Long: `This command shows the cached probe results for direct mode (the
-direct option): every candidate IP, its latency and the last error.
+	Long: `This command shows the cached results for direct mode (the direct
+option): every candidate IP with its latency and last error, the speed
+test results, and the order downloads and uploads try the paths in.
 
 Usage examples:
 
@@ -4827,12 +4868,18 @@ Usage examples:
 rclone backend direct drive:
 rclone backend direct drive: -o scan
 rclone backend direct drive: -o scan --drive-direct-ips 142.250.1.1,142.250.1.2
+rclone backend direct drive: -o speedtest --drive-direct
 ` + "```" + `
 
 With -o scan it probes the candidates now and saves the result, even if
-direct mode is off, so you can check which IPs work before enabling it.`,
+direct mode is off, so you can check which IPs work before enabling it.
+
+With -o speedtest (direct mode on) it measures download and upload speed
+through every path now. The output lists the paths in the order
+downloads and uploads will try them.`,
 	Opts: map[string]string{
-		"scan": "Probe the candidate IPs now",
+		"scan":      "Probe the candidate IPs now",
+		"speedtest": "Measure the speed of every path now",
 	},
 }}
 

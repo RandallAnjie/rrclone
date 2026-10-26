@@ -7,12 +7,21 @@
 // Drive hosts while TLS is still verified against the real hostname.
 // Token refresh (oauth2.googleapis.com) is left on the normal network.
 //
+// Each Drive request can take one of several paths: one of the fastest
+// scanned IPs, or the "normal" path, which is the endpoint option (a relay)
+// when set and the normal network otherwise. Paths are ranked separately
+// for downloads and uploads by a periodic speed test, a path that fails or
+// stalls is avoided for a while, and traffic goes back to it once that
+// backoff ends.
+//
 // This is an independent Go implementation; no gdirect code is used.
 
 package drive
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -30,20 +39,29 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config"
 	"github.com/rclone/rclone/fs/fshttp"
+	drive "google.golang.org/api/drive/v3"
 )
 
 const (
 	directSNIOff        = "off"
+	directNormal        = "normal" // path through the endpoint option or the normal network
 	directProbeWorkers  = 8
 	directProbeTimeout  = 5 * time.Second
 	directScanTimeout   = 30 * time.Second
-	directCooldown      = 5 * time.Minute
+	directCooldown      = 5 * time.Minute // minimum time between scans or speed tests
+	directBackoffMin    = time.Minute
+	directBackoffMax    = 30 * time.Minute
 	directMaxCandidates = 256
+	directMaxIPPaths    = 3 // fastest scanned IPs used as paths
+	directSpeedTimeout  = 20 * time.Second
+	directSpeedMinBytes = 256 << 10
+	directUploadChunk   = 256 << 10 // resumable upload chunks must be a multiple of this
 )
 
 // directSeedIPs are bootstrap candidates for networks where DNS for Google
@@ -61,6 +79,9 @@ var directResolveHosts = []string{
 // directProbeURL must answer 401 with a Google JSON error when called
 // without a token. Replaced in tests.
 var directProbeURL = "https://www.googleapis.com/drive/v3/about?fields=user"
+
+// directAPIURL is the origin of the Drive API. Replaced in tests.
+var directAPIURL = &url.URL{Scheme: "https", Host: "www.googleapis.com"}
 
 // directAllowIP filters candidates. Replaced in tests.
 var directAllowIP = isPublicIP
@@ -104,7 +125,7 @@ func isPublicIP(ip netip.Addr) bool {
 	return true
 }
 
-// directEndpoint is one probed IP.
+// directEndpoint is one probed IP, or the normal path.
 type directEndpoint struct {
 	IP        string    `json:"ip"`
 	LatencyMs int64     `json:"latency_ms,omitempty"`
@@ -114,24 +135,73 @@ type directEndpoint struct {
 
 func (e directEndpoint) ok() bool { return e.Error == "" }
 
-type directCache struct {
-	ScannedAt time.Time        `json:"scanned_at"`
-	Endpoints []directEndpoint `json:"endpoints"`
+// directDir is the direction a request moves data in.
+type directDir int
+
+const (
+	directDown directDir = iota // downloads and API calls
+	directUp                    // uploads
+)
+
+func (d directDir) String() string {
+	if d == directUp {
+		return "uploads"
+	}
+	return "downloads"
 }
 
-// directRouter holds the scan results shared by all drive remotes with the
-// same candidate list.
-type directRouter struct {
-	candidates []string // user supplied candidates, empty for the defaults
-	sni        string
-	rescan     time.Duration
-	cachePath  string
+// directSpeed is the speed test result for one path. A speed of 0 with no
+// error means it wasn't measured.
+type directSpeed struct {
+	DownBps   int64     `json:"down_bps,omitempty"`
+	DownError string    `json:"down_error,omitempty"`
+	UpBps     int64     `json:"up_bps,omitempty"`
+	UpError   string    `json:"up_error,omitempty"`
+	TestedAt  time.Time `json:"tested_at"`
+}
 
-	mu       sync.Mutex
-	cache    directCache
-	bad      map[string]time.Time // IP -> cooldown end
-	scanning chan struct{}        // closed when the running scan ends
-	warned   bool
+func (s directSpeed) get(dir directDir) (bps int64, errStr string) {
+	if dir == directUp {
+		return s.UpBps, s.UpError
+	}
+	return s.DownBps, s.DownError
+}
+
+type directCache struct {
+	ScannedAt     time.Time              `json:"scanned_at"`
+	Endpoints     []directEndpoint       `json:"endpoints"`
+	Normal        directEndpoint         `json:"normal"`
+	SpeedTestedAt time.Time              `json:"speed_tested_at,omitzero"`
+	Speeds        map[string]directSpeed `json:"speeds,omitempty"`
+}
+
+// directBackoff tracks a path that failed.
+type directBackoff struct {
+	until time.Time
+	fails int
+}
+
+// directRouter holds the scan and speed test results shared by all drive
+// remotes with the same candidates, SNI and endpoint.
+type directRouter struct {
+	candidates  []string // user supplied candidates, empty for the defaults
+	sni         string
+	rescan      time.Duration
+	speedSize   int64
+	speedEvery  time.Duration
+	stall       time.Duration
+	relay       *url.URL // endpoint option origin, nil when unset
+	relayPrefix string   // path before /drive/v3 on the endpoint
+	cachePath   string
+
+	mu         sync.Mutex
+	cache      directCache
+	bad        map[string]*directBackoff // path -> backoff
+	scanning   chan struct{}             // closed when the running scan ends
+	speedDone  chan struct{}             // closed when the running speed test ends
+	speedTried time.Time
+	speedFs    *Fs       // remote used to run speed tests
+	current    [2]string // path last used per direction, for logging
 }
 
 var (
@@ -143,7 +213,8 @@ var (
 func getDirectRouter(opt *Options) *directRouter {
 	candidates := slices.Clone([]string(opt.DirectIPs))
 	slices.Sort(candidates)
-	key := strings.Join(candidates, ",") + "|" + opt.DirectSNI
+	endpoint := driveAPIEndpoint(opt.Endpoint, "v3")
+	key := strings.Join(candidates, ",") + "|" + opt.DirectSNI + "|" + endpoint
 	directRoutersMu.Lock()
 	defer directRoutersMu.Unlock()
 	if r, ok := directRouters[key]; ok {
@@ -154,11 +225,23 @@ func getDirectRouter(opt *Options) *directRouter {
 		candidates: candidates,
 		sni:        opt.DirectSNI,
 		rescan:     time.Duration(opt.DirectRescan),
+		speedSize:  int64(opt.DirectSpeedTest),
+		speedEvery: time.Duration(opt.DirectSpeedTestInterval),
+		stall:      time.Duration(opt.DirectStallTimeout),
 		cachePath:  filepath.Join(config.GetCacheDir(), "drive-direct", hex.EncodeToString(sum[:6])+".json"),
-		bad:        map[string]time.Time{},
+		bad:        map[string]*directBackoff{},
 	}
 	if r.rescan <= 0 {
 		r.rescan = 24 * time.Hour
+	}
+	if r.speedEvery <= 0 {
+		r.speedEvery = time.Hour
+	}
+	if endpoint != "" {
+		if u, err := url.Parse(endpoint); err == nil && u.Host != "" && !isOfficialGoogleAPIHost(strings.ToLower(u.Hostname())) {
+			r.relay = &url.URL{Scheme: u.Scheme, Host: u.Host}
+			r.relayPrefix = driveAPIPathPrefix(u.Path)
+		}
 	}
 	r.load()
 	directRouters[key] = r
@@ -178,6 +261,7 @@ func (r *directRouter) load() {
 	r.cache = c
 }
 
+// save writes the cache. Call with r.mu held.
 func (r *directRouter) save() {
 	data, err := json.MarshalIndent(r.cache, "", "  ")
 	if err == nil {
@@ -190,38 +274,53 @@ func (r *directRouter) save() {
 	}
 }
 
-// usable returns the working IPs, best first, skipping those cooling down
-// unless every one is. Call with r.mu held.
-func (r *directRouter) usable(now time.Time) (ips []string, allCooling bool) {
-	var cooling []string
+// pathName describes a path for logs.
+func (r *directRouter) pathName(p string) string {
+	if p != directNormal {
+		return "Google IP " + p
+	}
+	if r.relay != nil {
+		return "endpoint " + r.relay.Host
+	}
+	return "normal network"
+}
+
+// okIPs returns the fastest working IPs. Call with r.mu held.
+func (r *directRouter) okIPs() []string {
+	var ips []string
 	for _, e := range r.cache.Endpoints {
-		if !e.ok() {
-			continue
-		}
-		if now.Before(r.bad[e.IP]) {
-			cooling = append(cooling, e.IP)
-		} else {
+		if e.ok() && len(ips) < directMaxIPPaths {
 			ips = append(ips, e.IP)
 		}
 	}
-	if len(ips) == 0 && len(cooling) > 0 {
-		return cooling, true
-	}
-	return ips, false
+	return ips
 }
 
-// endpoints returns IPs to try, scanning first when the cache is stale,
-// empty, or every IP has recently failed.
-func (r *directRouter) endpoints(ctx context.Context) []string {
+// cooling reports whether path p is backing off. Call with r.mu held.
+func (r *directRouter) cooling(p string, now time.Time) bool {
+	b := r.bad[p]
+	return b != nil && now.Before(b.until)
+}
+
+// ips returns the IP paths, scanning first when the cache is stale, empty,
+// or every IP is backing off. With wait false a needed scan runs in the
+// background and the current IPs are returned.
+func (r *directRouter) ips(ctx context.Context, wait bool) []string {
 	r.mu.Lock()
 	now := time.Now()
-	ips, allCooling := r.usable(now)
+	ips := r.okIPs()
+	allCooling := len(ips) > 0
+	for _, ip := range ips {
+		if !r.cooling(ip, now) {
+			allCooling = false
+		}
+	}
 	age := now.Sub(r.cache.ScannedAt)
 	// A scan within the cooldown is trusted even if it found nothing, so a
-	// network with no reachable IP doesn't rescan on every dial.
+	// network with no reachable IP doesn't rescan on every request.
 	fresh := age < directCooldown ||
 		(age < r.rescan && len(ips) > 0 && !allCooling)
-	if fresh {
+	if fresh || (r.scanning != nil && !wait) {
 		r.mu.Unlock()
 		return ips
 	}
@@ -229,70 +328,390 @@ func (r *directRouter) endpoints(ctx context.Context) []string {
 		done := make(chan struct{})
 		r.scanning = done
 		r.mu.Unlock()
-		// Detached from ctx so one cancelled request doesn't abort the
-		// scan that other transfers are waiting for.
-		scanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), directScanTimeout)
-		_, err := r.scan(scanCtx)
-		cancel()
-		if err != nil {
-			fs.Errorf(nil, "drive direct: %v", err)
+		run := func() {
+			// Detached from ctx so one cancelled request doesn't abort the
+			// scan that other transfers are waiting for.
+			scanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), directScanTimeout)
+			_, err := r.scan(scanCtx)
+			cancel()
+			if err != nil {
+				fs.Errorf(nil, "drive direct: %v", err)
+			}
+			r.mu.Lock()
+			r.scanning = nil
+			close(done)
+			r.mu.Unlock()
 		}
-		r.mu.Lock()
-		r.scanning = nil
-		close(done)
-		ips, _ = r.usable(time.Now())
+		if !wait {
+			go run()
+			return ips
+		}
+		run()
+	} else {
+		done := r.scanning
 		r.mu.Unlock()
-		return ips
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return nil
+		}
 	}
-	done := r.scanning
-	r.mu.Unlock()
-	select {
-	case <-done:
-		r.mu.Lock()
-		ips, _ = r.usable(time.Now())
-		r.mu.Unlock()
-		return ips
-	case <-ctx.Done():
-		return nil
-	}
-}
-
-func (r *directRouter) markBad(ip string, err error) {
 	r.mu.Lock()
-	r.bad[ip] = time.Now().Add(directCooldown)
-	r.mu.Unlock()
-	fs.Debugf(nil, "drive direct: %s failed, cooling down for %v: %v", ip, directCooldown, err)
+	defer r.mu.Unlock()
+	return r.okIPs()
 }
 
-type dialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+// latency of path p in ms; unknown counts as the probe timeout. Call with
+// r.mu held.
+func (r *directRouter) latency(p string) int64 {
+	unknown := directProbeTimeout.Milliseconds()
+	if p == directNormal {
+		if n := r.cache.Normal; n.ok() && n.LatencyMs > 0 {
+			return n.LatencyMs
+		}
+		return unknown
+	}
+	for _, e := range r.cache.Endpoints {
+		if e.IP == p && e.ok() {
+			return e.LatencyMs
+		}
+	}
+	return unknown
+}
 
-// dial connects to a scanned IP on the port from addr, falling back to the
-// normal dial when no scanned IP works.
-func (r *directRouter) dial(ctx context.Context, dial dialFunc, network, addr string) (net.Conn, error) {
-	_, port, err := net.SplitHostPort(addr)
+// rank orders paths for dir: measured speed first, then unmeasured by
+// latency, then paths whose speed test failed. Lower is better. Call with
+// r.mu held.
+func (r *directRouter) rank(p string, dir directDir) (tier int, v int64) {
+	if s, ok := r.cache.Speeds[p]; ok {
+		bps, errStr := s.get(dir)
+		if bps > 0 {
+			return 0, -bps
+		}
+		if errStr != "" {
+			return 2, r.latency(p)
+		}
+	}
+	return 1, r.latency(p)
+}
+
+// order returns the paths to try, best first. The normal path is ranked
+// with the rest when rankNormal is set and is otherwise kept as a last
+// resort; backing off paths are only used when nothing else is left. Call
+// with r.mu held.
+func (r *directRouter) order(ips []string, dir directDir, rankNormal bool, now time.Time) []string {
+	all := slices.Clone(ips)
+	if rankNormal {
+		all = append(all, directNormal)
+	}
+	slices.SortStableFunc(all, func(a, b string) int {
+		ta, va := r.rank(a, dir)
+		tb, vb := r.rank(b, dir)
+		if ta != tb {
+			return ta - tb
+		}
+		switch {
+		case va < vb:
+			return -1
+		case va > vb:
+			return 1
+		}
+		return 0
+	})
+	if !rankNormal {
+		all = append(all, directNormal)
+	}
+	var active, cooling []string
+	for _, p := range all {
+		if r.cooling(p, now) {
+			cooling = append(cooling, p)
+		} else {
+			active = append(active, p)
+		}
+	}
+	if len(active) == 0 {
+		return cooling
+	}
+	if slices.Contains(cooling, directNormal) {
+		active = append(active, directNormal)
+	}
+	return active
+}
+
+// paths returns the paths to try for a request, best first.
+func (r *directRouter) paths(ctx context.Context, dir directDir, rt directRoute) []string {
+	// With a relay to fall back on, don't hold requests up for a scan.
+	ips := r.ips(ctx, !rt.relayable)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// The normal path's speed is the relay's when there is one, which
+	// says nothing about requests the relay can't serve.
+	return r.order(ips, dir, rt.relayable || r.relay == nil, time.Now())
+}
+
+func (r *directRouter) markBad(p string, err error) {
+	r.mu.Lock()
+	now := time.Now()
+	b := r.bad[p]
+	if b == nil {
+		b = &directBackoff{}
+		r.bad[p] = b
+	}
+	if now.Before(b.until) {
+		// Other requests in flight on this path failed too.
+		r.mu.Unlock()
+		return
+	}
+	d := min(directBackoffMin<<min(b.fails, 5), directBackoffMax)
+	b.fails++
+	b.until = now.Add(d)
+	name := r.pathName(p)
+	r.mu.Unlock()
+	fs.Infof(nil, "drive direct: %s failed, avoiding it for %v: %v", name, d, err)
+}
+
+// markOK forgets the failures of p once its backoff is over.
+func (r *directRouter) markOK(p string, dir directDir) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if b := r.bad[p]; b != nil && !time.Now().Before(b.until) {
+		delete(r.bad, p)
+	}
+	if r.current[dir] != p {
+		old := r.current[dir]
+		r.current[dir] = p
+		if old != "" {
+			fs.Infof(nil, "drive direct: %s now via %s (was %s)", dir, r.pathName(p), r.pathName(old))
+		} else {
+			fs.Debugf(nil, "drive direct: %s via %s", dir, r.pathName(p))
+		}
+	}
+}
+
+// relayURL maps an official Drive API URL onto the endpoint option.
+func (r *directRouter) relayURL(o *url.URL) *url.URL {
+	u := *o
+	u.Scheme, u.Host = r.relay.Scheme, r.relay.Host
+	u.Path = r.relayPrefix + o.Path
+	if o.RawPath != "" {
+		u.RawPath = r.relayPrefix + o.RawPath
+	}
+	return &u
+}
+
+// directRoute is where a Drive request may go.
+type directRoute struct {
+	official  *url.URL // the URL on the Google host
+	relayable bool     // the endpoint option can serve it
+}
+
+// route works out whether u is Drive traffic. Requests already aimed at
+// the endpoint option are mapped back to the Google URL so they can take
+// any path.
+func (r *directRouter) route(u *url.URL) (directRoute, bool) {
+	if r.relay != nil && u.Scheme == r.relay.Scheme && strings.EqualFold(u.Host, r.relay.Host) {
+		rest, found := strings.CutPrefix(u.Path, r.relayPrefix)
+		if !found || !(strings.HasPrefix(rest, "/drive/") || strings.HasPrefix(rest, "/upload/drive/")) {
+			return directRoute{}, false // e.g. token_url on the same host
+		}
+		o := *u
+		o.Scheme, o.Host = directAPIURL.Scheme, directAPIURL.Host
+		o.Path = rest
+		o.RawPath = strings.TrimPrefix(u.RawPath, r.relayPrefix)
+		return directRoute{official: &o, relayable: true}, true
+	}
+	if !directRoutedHost(u.Hostname()) {
+		return directRoute{}, false
+	}
+	o := *u
+	return directRoute{
+		official:  &o,
+		relayable: r.relay != nil && isOfficialGoogleAPIHost(strings.ToLower(u.Hostname())),
+	}, true
+}
+
+// directPathFailed reports statuses that mean the path, not Drive, failed:
+// gateway errors from a relay or a front end.
+func directPathFailed(status int) bool {
+	return status == http.StatusBadGateway || status == http.StatusGatewayTimeout ||
+		(status >= 520 && status <= 530) // Cloudflare
+}
+
+// directPathKey in a request context forces a path, for speed tests.
+type directPathKey struct{}
+
+// directTransport sends Drive requests down the best path and fails over
+// to the next one.
+type directTransport struct {
+	r      *directRouter
+	normal http.RoundTripper
+	newIP  func(ip string) http.RoundTripper
+
+	mu   sync.Mutex
+	byIP map[string]http.RoundTripper // one pool per IP so connections aren't mixed
+}
+
+func newDirectTransport(ctx context.Context, opt *Options, normal http.RoundTripper, customize func(*http.Transport)) *directTransport {
+	return &directTransport{
+		r:      getDirectRouter(opt),
+		normal: normal,
+		newIP: func(ip string) http.RoundTripper {
+			return fshttp.NewTransportCustom(ctx, func(t *http.Transport) {
+				customize(t)
+				pinDirectIP(t, ip, opt.DirectSNI)
+			})
+		},
+		byIP: map[string]http.RoundTripper{},
+	}
+}
+
+func (d *directTransport) ipTransport(ip string) http.RoundTripper {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	t := d.byIP[ip]
+	if t == nil {
+		t = d.newIP(ip)
+		d.byIP[ip] = t
+	}
+	return t
+}
+
+// RoundTrip implements http.RoundTripper.
+func (d *directTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	rt, ok := d.r.route(req.URL)
+	if !ok {
+		return d.normal.RoundTrip(req)
+	}
+	read := req.Method == http.MethodGet || req.Method == http.MethodHead
+	dir := directDown
+	if !read && strings.HasPrefix(rt.official.Path, "/upload/") {
+		dir = directUp
+	}
+	ctx := req.Context()
+	forced, _ := ctx.Value(directPathKey{}).(string)
+	var paths []string
+	if forced != "" {
+		paths = []string{forced}
+	} else {
+		if dir == directUp || rt.official.Query().Get("alt") == "media" || !rt.relayable {
+			// Only transfers start a speed test, not a quick listing.
+			d.r.maybeSpeedTest(ctx)
+		}
+		paths = d.r.paths(ctx, dir, rt)
+	}
+	// Only requests that can't have changed anything are retried here;
+	// the rest fail and the caller's retry picks the next path.
+	retry := forced == "" && read && (req.Body == nil || req.Body == http.NoBody)
+	var lastErr error
+	for i, p := range paths {
+		last := !retry || i == len(paths)-1
+		resp, err := d.try(req, rt, p, forced == "")
+		if err == nil && !directPathFailed(resp.StatusCode) {
+			if forced == "" {
+				d.r.markOK(p, dir)
+			}
+			return resp, nil
+		}
+		if ctx.Err() != nil {
+			return resp, err
+		}
+		if err == nil {
+			err = fmt.Errorf("HTTP %s", resp.Status)
+			if forced == "" {
+				d.r.markBad(p, err)
+			}
+			if last {
+				return resp, nil
+			}
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+			_ = resp.Body.Close()
+		} else if forced == "" {
+			d.r.markBad(p, err)
+		}
+		lastErr = err
+		if last {
+			break
+		}
+	}
+	return nil, lastErr
+}
+
+// try sends req down path p.
+func (d *directTransport) try(req *http.Request, rt directRoute, p string, track bool) (*http.Response, error) {
+	target := *rt.official
+	t := d.normal
+	if p == directNormal {
+		if rt.relayable {
+			target = *d.r.relayURL(rt.official)
+		}
+	} else {
+		t = d.ipTransport(p)
+	}
+	if d.r.stall <= 0 {
+		out := req.Clone(req.Context())
+		out.URL, out.Host = &target, ""
+		return t.RoundTrip(out)
+	}
+	ctx, cancel := context.WithCancel(req.Context())
+	out := req.Clone(ctx)
+	out.URL, out.Host = &target, ""
+	resp, err := t.RoundTrip(out)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
-	for _, ip := range r.endpoints(ctx) {
-		conn, err := dial(ctx, network, net.JoinHostPort(ip, port))
-		if err == nil {
-			return conn, nil
-		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, err
-		}
-		r.markBad(ip, err)
+	var onStall func()
+	if track {
+		onStall = func() { d.r.markBad(p, errDirectStalled) }
 	}
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
+	resp.Body = newDirectBody(resp.Body, d.r.stall, cancel, onStall)
+	return resp, nil
+}
+
+var errDirectStalled = errors.New("drive direct: no data received within direct_stall_timeout")
+
+// directBody aborts a response body when a read waits longer than stall.
+// Only time spent inside Read counts, so a slow reader isn't a stall.
+type directBody struct {
+	io.ReadCloser
+	stall   time.Duration
+	cancel  context.CancelFunc
+	onStall func()
+	timer   *time.Timer
+	stalled atomic.Bool
+	once    sync.Once
+}
+
+func newDirectBody(rc io.ReadCloser, stall time.Duration, cancel context.CancelFunc, onStall func()) *directBody {
+	b := &directBody{ReadCloser: rc, stall: stall, cancel: cancel, onStall: onStall}
+	b.timer = time.AfterFunc(time.Hour, func() {
+		b.stalled.Store(true)
+		b.cancel()
+	})
+	b.timer.Stop()
+	return b
+}
+
+func (b *directBody) Read(p []byte) (int, error) {
+	b.timer.Reset(b.stall)
+	n, err := b.ReadCloser.Read(p)
+	b.timer.Stop()
+	if err != nil && err != io.EOF && b.stalled.Load() {
+		b.once.Do(func() {
+			if b.onStall != nil {
+				b.onStall()
+			}
+		})
+		return n, errDirectStalled
 	}
-	r.mu.Lock()
-	if !r.warned {
-		r.warned = true
-		fs.Logf(nil, "drive direct: no reachable Google IP, using the normal network for %s", addr)
-	}
-	r.mu.Unlock()
-	return dial(ctx, network, addr)
+	return n, err
+}
+
+func (b *directBody) Close() error {
+	b.timer.Stop()
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err
 }
 
 // candidateList builds the IPs to probe: user candidates or the seeds plus
@@ -356,13 +775,37 @@ func (r *directRouter) candidateList(ctx context.Context) ([]netip.Addr, error) 
 	return out, nil
 }
 
-// scan probes every candidate and stores the results.
+// normalProbeURL is the probe URL on the normal path.
+func (r *directRouter) normalProbeURL() string {
+	if r.relay == nil {
+		return directProbeURL
+	}
+	u, err := url.Parse(directProbeURL)
+	if err != nil {
+		return directProbeURL
+	}
+	return r.relayURL(u).String()
+}
+
+// scan probes every candidate and the normal path and stores the results.
 func (r *directRouter) scan(ctx context.Context) ([]directEndpoint, error) {
 	ips, err := r.candidateList(ctx)
 	if err != nil {
 		return nil, err
 	}
 	fs.Infof(nil, "drive direct: probing %d candidate IPs", len(ips))
+
+	normal := directEndpoint{IP: directNormal, CheckedAt: time.Now()}
+	var normalWG sync.WaitGroup
+	normalWG.Go(func() {
+		latency, err := probeDirect(ctx, r.normalProbeURL(), nil)
+		if err != nil {
+			normal.Error = err.Error()
+		} else {
+			normal.LatencyMs = max(latency.Milliseconds(), 1)
+		}
+	})
+
 	jobs := make(chan netip.Addr)
 	results := make([]directEndpoint, 0, len(ips))
 	var resultsMu sync.Mutex
@@ -371,7 +814,9 @@ func (r *directRouter) scan(ctx context.Context) ([]directEndpoint, error) {
 		wg.Go(func() {
 			for ip := range jobs {
 				e := directEndpoint{IP: ip.String(), CheckedAt: time.Now()}
-				latency, err := probeDirectIP(ctx, ip.String(), r.sni)
+				latency, err := probeDirect(ctx, directProbeURL, func(t *http.Transport) {
+					pinDirectIP(t, ip.String(), r.sni)
+				})
 				if err != nil {
 					e.Error = err.Error()
 				} else {
@@ -388,15 +833,26 @@ func (r *directRouter) scan(ctx context.Context) ([]directEndpoint, error) {
 	}
 	close(jobs)
 	wg.Wait()
+	normalWG.Wait()
 	sortDirectEndpoints(results)
 
 	r.mu.Lock()
-	r.cache = directCache{ScannedAt: time.Now(), Endpoints: results}
-	clear(r.bad)
-	r.warned = false
+	r.cache.ScannedAt = time.Now()
+	r.cache.Endpoints = results
+	r.cache.Normal = normal
+	for p := range r.bad {
+		if p != directNormal {
+			delete(r.bad, p)
+		}
+	}
 	r.save()
 	r.mu.Unlock()
 
+	if normal.ok() {
+		fs.Infof(nil, "drive direct: %s answers in %d ms", r.pathName(directNormal), normal.LatencyMs)
+	} else {
+		fs.Infof(nil, "drive direct: %s failed the probe: %s", r.pathName(directNormal), normal.Error)
+	}
 	good := 0
 	for _, e := range results {
 		if e.ok() {
@@ -429,22 +885,28 @@ func sortDirectEndpoints(es []directEndpoint) {
 	})
 }
 
-// probeDirectIP makes an unauthenticated Drive API call through ip and
-// checks Google answers it. Only the TLS handshake to the real hostname
-// plus Google's JSON 401 counts as success.
-func probeDirectIP(ctx context.Context, ip, sni string) (time.Duration, error) {
-	t := fshttp.NewTransportCustom(ctx, func(t *http.Transport) {
-		t.Proxy = nil
-		t.DisableKeepAlives = true
-		dial := t.DialContext
-		t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			_, port, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, err
-			}
-			return dial(ctx, network, net.JoinHostPort(ip, port))
+// pinDirectIP makes t dial ip for every address, without a proxy.
+func pinDirectIP(t *http.Transport, ip, sni string) {
+	t.Proxy = nil
+	dial := t.DialContext
+	t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		_, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
 		}
-		applyDirectSNI(t, sni)
+		return dial(ctx, network, net.JoinHostPort(ip, port))
+	}
+	applyDirectSNI(t, sni)
+}
+
+// probeDirect makes an unauthenticated Drive API call to probeURL and
+// checks Google answers it. Only Google's JSON 401 counts as success.
+func probeDirect(ctx context.Context, probeURL string, customize func(*http.Transport)) (time.Duration, error) {
+	t := fshttp.NewTransportCustom(ctx, func(t *http.Transport) {
+		t.DisableKeepAlives = true
+		if customize != nil {
+			customize(t)
+		}
 	})
 	client := &http.Client{
 		Transport: t,
@@ -453,7 +915,7 @@ func probeDirectIP(ctx context.Context, ip, sni string) (time.Duration, error) {
 			return http.ErrUseLastResponse
 		},
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, directProbeURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -479,28 +941,6 @@ func probeDirectIP(ctx context.Context, ip, sni string) (time.Duration, error) {
 		return 0, errors.New("response is not a Drive API error")
 	}
 	return time.Since(start), nil
-}
-
-// applyDirect makes t dial Drive hosts on scanned Google IPs, bypassing
-// any HTTP proxy for them.
-func applyDirect(t *http.Transport, opt *Options) {
-	r := getDirectRouter(opt)
-	proxy := t.Proxy
-	t.Proxy = func(req *http.Request) (*url.URL, error) {
-		if directRoutedHost(req.URL.Hostname()) || proxy == nil {
-			return nil, nil
-		}
-		return proxy(req)
-	}
-	dial := t.DialContext
-	t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, _, err := net.SplitHostPort(addr)
-		if err != nil || !directRoutedHost(host) {
-			return dial(ctx, network, addr)
-		}
-		return r.dial(ctx, dial, network, addr)
-	}
-	applyDirectSNI(t, opt.DirectSNI)
 }
 
 // applyDirectSNI replaces the TLS server name sent to Drive hosts with sni,
@@ -576,13 +1016,270 @@ func verifyDirectCert(cs tls.ConnectionState, host string, roots *x509.CertPool)
 	return err
 }
 
+// setSpeedFs makes f the remote speed tests run on.
+func (r *directRouter) setSpeedFs(f *Fs) {
+	r.mu.Lock()
+	r.speedFs = f
+	r.mu.Unlock()
+}
+
+// maybeSpeedTest starts a background speed test when the results are
+// older than the interval or than the last scan.
+func (r *directRouter) maybeSpeedTest(ctx context.Context) {
+	if r.speedSize <= 0 {
+		return
+	}
+	r.mu.Lock()
+	now := time.Now()
+	f := r.speedFs
+	due := f != nil && r.speedDone == nil && now.Sub(r.speedTried) >= directCooldown &&
+		(now.Sub(r.cache.SpeedTestedAt) >= r.speedEvery || r.cache.ScannedAt.After(r.cache.SpeedTestedAt))
+	if due {
+		r.speedTried = now
+	}
+	r.mu.Unlock()
+	if due {
+		go func() {
+			if err := r.runSpeedTest(context.WithoutCancel(ctx), f); err != nil {
+				fs.Infof(nil, "drive direct: speed test: %v", err)
+			}
+		}()
+	}
+}
+
+// runSpeedTest runs a speed test now, or waits for the one running.
+func (r *directRouter) runSpeedTest(ctx context.Context, f *Fs) error {
+	r.mu.Lock()
+	if done := r.speedDone; done != nil {
+		r.mu.Unlock()
+		select {
+		case <-done:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	done := make(chan struct{})
+	r.speedDone = done
+	r.speedTried = time.Now()
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		r.speedDone = nil
+		close(done)
+		r.mu.Unlock()
+	}()
+	return r.speedTest(ctx, f)
+}
+
+// speedTest measures download and upload speed on every path, one path
+// at a time so they don't compete with each other.
+func (r *directRouter) speedTest(ctx context.Context, f *Fs) error {
+	size := (max(r.speedSize, directUploadChunk) + directUploadChunk - 1) / directUploadChunk * directUploadChunk
+	paths := append(r.ips(ctx, true), directNormal)
+	r.mu.Lock()
+	normal := r.cache.Normal
+	r.mu.Unlock()
+	fileID, n, fileErr := f.directSpeedTestFile(ctx, size)
+	results := make(map[string]directSpeed, len(paths))
+	for _, p := range paths {
+		pctx := context.WithValue(ctx, directPathKey{}, p)
+		s := directSpeed{TestedAt: time.Now()}
+		if p == directNormal && !normal.ok() {
+			// Don't wait for timeouts on a path that is known to be down.
+			s.DownError = "failed the probe: " + normal.Error
+			s.UpError = s.DownError
+			results[p] = s
+			continue
+		}
+		var err error
+		if fileErr != nil {
+			s.DownError = fileErr.Error()
+		} else if s.DownBps, err = f.directDownloadTest(pctx, fileID, n); err != nil {
+			s.DownError = err.Error()
+		}
+		if s.UpBps, err = f.directUploadTest(pctx, size); err != nil {
+			s.UpError = err.Error()
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		results[p] = s
+		fs.Infof(nil, "drive direct: speed test %s: download %s, upload %s",
+			r.pathName(p), directSpeedString(s.DownBps, s.DownError), directSpeedString(s.UpBps, s.UpError))
+	}
+	r.mu.Lock()
+	r.cache.Speeds = results
+	r.cache.SpeedTestedAt = time.Now()
+	r.save()
+	r.mu.Unlock()
+	return nil
+}
+
+func directSpeedString(bps int64, errStr string) string {
+	if errStr != "" {
+		return "failed (" + errStr + ")"
+	}
+	return fs.SizeSuffix(bps).ByteRateUnit()
+}
+
+// directRate turns got bytes in d into a speed. Running out of time still
+// gives a speed if enough arrived.
+func directRate(ctx context.Context, got int64, d time.Duration, err error) (int64, error) {
+	if err != nil && (ctx.Err() == nil || got < directSpeedMinBytes) {
+		if ctx.Err() != nil {
+			return 0, fmt.Errorf("too slow: %s in %v", fs.SizeSuffix(got).ByteUnit(), d.Round(time.Second))
+		}
+		return 0, err
+	}
+	return int64(float64(got) / max(d.Seconds(), 1e-3)), nil
+}
+
+// directSpeedTestFile picks the largest file on the remote to download
+// from, up to want bytes of it.
+func (f *Fs) directSpeedTestFile(ctx context.Context, want int64) (id string, n int64, err error) {
+	list := f.svc.Files.List().
+		Q("trashed=false and mimeType!='" + driveFolderType + "'").
+		OrderBy("quotaBytesUsed desc").
+		PageSize(1).
+		Fields("files(id,size)").
+		SupportsAllDrives(true)
+	if f.isTeamDrive {
+		list.Corpora("drive").DriveId(f.opt.TeamDriveID).IncludeItemsFromAllDrives(true)
+	}
+	var files *drive.FileList
+	files, err = list.Context(ctx).Do()
+	if err != nil {
+		return "", 0, fmt.Errorf("finding a file to download: %w", err)
+	}
+	if len(files.Files) == 0 || files.Files[0].Size < 4*directSpeedMinBytes {
+		return "", 0, errors.New("no file of at least 1 MiB to download")
+	}
+	return files.Files[0].Id, min(want, files.Files[0].Size), nil
+}
+
+// directDownloadTest downloads the first n bytes of file id.
+func (f *Fs) directDownloadTest(ctx context.Context, id string, n int64) (int64, error) {
+	ctx, cancel := context.WithTimeout(ctx, directSpeedTimeout)
+	defer cancel()
+	u := directAPIURL.String() + "/drive/v3/files/" + url.PathEscape(id) + "?alt=media&supportsAllDrives=true"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", n-1))
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		return 0, fmt.Errorf("HTTP %s", resp.Status)
+	}
+	start := time.Now()
+	got, err := io.CopyN(io.Discard, resp.Body, n)
+	if err == io.EOF {
+		err = nil
+	}
+	return directRate(ctx, got, time.Since(start), err)
+}
+
+// directUploadTest uploads n bytes to a resumable upload session and then
+// cancels it, so no file is created.
+func (f *Fs) directUploadTest(ctx context.Context, n int64) (int64, error) {
+	ctx, cancel := context.WithTimeout(ctx, directSpeedTimeout)
+	defer cancel()
+	meta := map[string]any{"name": ".rrclone-direct-speedtest"}
+	if f.rootFolderID != "" {
+		meta["parents"] = []string{f.rootFolderID}
+	}
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return 0, err
+	}
+	u := directAPIURL.String() + "/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(metaJSON))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=UTF-8")
+	req.Header.Set("X-Upload-Content-Type", "application/octet-stream")
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	_ = resp.Body.Close()
+	loc := resp.Header.Get("Location")
+	if resp.StatusCode != http.StatusOK || loc == "" {
+		return 0, fmt.Errorf("starting upload: HTTP %s", resp.Status)
+	}
+	defer func() {
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), directProbeTimeout)
+		defer cancel()
+		if req, err := http.NewRequestWithContext(dctx, http.MethodDelete, loc, nil); err == nil {
+			if resp, err := f.client.Do(req); err == nil {
+				_ = resp.Body.Close()
+			}
+		}
+	}()
+
+	data := make([]byte, n)
+	_, _ = rand.Read(data) // random so nothing on the way can compress it
+	body := &directCountingReader{r: bytes.NewReader(data)}
+	req, err = http.NewRequestWithContext(ctx, http.MethodPut, loc, body)
+	if err != nil {
+		return 0, err
+	}
+	req.ContentLength = n
+	req.Header.Set("Content-Range", fmt.Sprintf("bytes 0-%d/*", n-1))
+	start := time.Now()
+	resp, err = f.client.Do(req)
+	d := time.Since(start)
+	if err != nil {
+		return directRate(ctx, body.n.Load(), d, err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != statusResumeIncomplete {
+		return 0, fmt.Errorf("uploading: HTTP %s", resp.Status)
+	}
+	return directRate(ctx, n, d, nil)
+}
+
+type directCountingReader struct {
+	r io.Reader
+	n atomic.Int64
+}
+
+func (c *directCountingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n.Add(int64(n))
+	return n, err
+}
+
+// directPathStatus is one path in the "direct" backend command output.
+type directPathStatus struct {
+	Path        string `json:"path"`
+	Name        string `json:"name"`
+	LatencyMs   int64  `json:"latency_ms,omitempty"`
+	DownBps     int64  `json:"down_bps,omitempty"`
+	DownError   string `json:"down_error,omitempty"`
+	UpBps       int64  `json:"up_bps,omitempty"`
+	UpError     string `json:"up_error,omitempty"`
+	BackoffLeft string `json:"backoff_left,omitempty"`
+}
+
 // directStatus is the output of the "direct" backend command.
 type directStatus struct {
-	Enabled   bool             `json:"enabled"`
-	SNI       string           `json:"sni,omitempty"`
-	ScannedAt time.Time        `json:"scanned_at"`
-	CacheFile string           `json:"cache_file"`
-	Endpoints []directEndpoint `json:"endpoints"`
+	Enabled       bool               `json:"enabled"`
+	SNI           string             `json:"sni,omitempty"`
+	Endpoint      string             `json:"endpoint,omitempty"`
+	ScannedAt     time.Time          `json:"scanned_at"`
+	SpeedTestedAt time.Time          `json:"speed_tested_at,omitzero"`
+	CacheFile     string             `json:"cache_file"`
+	Downloads     []directPathStatus `json:"downloads"`
+	Uploads       []directPathStatus `json:"uploads"`
+	Normal        directEndpoint     `json:"normal"`
+	Endpoints     []directEndpoint   `json:"endpoints"`
 }
 
 func (f *Fs) directCommand(ctx context.Context, opt map[string]string) (any, error) {
@@ -592,13 +1289,47 @@ func (f *Fs) directCommand(ctx context.Context, opt map[string]string) (any, err
 			return nil, err
 		}
 	}
+	if _, ok := opt["speedtest"]; ok {
+		if !f.opt.Direct {
+			return nil, errors.New("speedtest needs direct mode on (--drive-direct)")
+		}
+		if err := r.runSpeedTest(ctx, f); err != nil {
+			return nil, err
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return directStatus{
-		Enabled:   f.opt.Direct,
-		SNI:       f.opt.DirectSNI,
-		ScannedAt: r.cache.ScannedAt,
-		CacheFile: r.cachePath,
-		Endpoints: slices.Clone(r.cache.Endpoints),
-	}, nil
+	now := time.Now()
+	status := directStatus{
+		Enabled:       f.opt.Direct,
+		SNI:           f.opt.DirectSNI,
+		ScannedAt:     r.cache.ScannedAt,
+		SpeedTestedAt: r.cache.SpeedTestedAt,
+		CacheFile:     r.cachePath,
+		Normal:        r.cache.Normal,
+		Endpoints:     slices.Clone(r.cache.Endpoints),
+	}
+	if r.relay != nil {
+		status.Endpoint = r.relay.String() + r.relayPrefix
+	}
+	ips := r.okIPs()
+	for dir, out := range map[directDir]*[]directPathStatus{directDown: &status.Downloads, directUp: &status.Uploads} {
+		for _, p := range r.order(ips, dir, true, now) {
+			s := r.cache.Speeds[p]
+			ps := directPathStatus{
+				Path:      p,
+				Name:      r.pathName(p),
+				LatencyMs: r.latency(p),
+				DownBps:   s.DownBps,
+				DownError: s.DownError,
+				UpBps:     s.UpBps,
+				UpError:   s.UpError,
+			}
+			if b := r.bad[p]; b != nil && now.Before(b.until) {
+				ps.BackoffLeft = b.until.Sub(now).Round(time.Second).String()
+			}
+			*out = append(*out, ps)
+		}
+	}
+	return status, nil
 }

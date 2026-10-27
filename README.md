@@ -30,6 +30,8 @@ Rclone *("rsync for cloud storage")* 是一个用于在各种云存储之间同�
 
 - **自定义 API**：Drive / Dropbox / Photos / Box / OneDrive 可把官方 API 主机换成反代。Drive 要换三个地址（授权、token、API）
 - **115 网盘**：浏览器 cookie + web API
+- **阿里云 OSS / 火山 TOS**：`oss`、`tos` 独立后端（S3 兼容）
+- **百度网盘**：cookie 或开放平台 token
 - **Google Drive 多 OAuth 账号轮换**：`--drive-oauth-account-files`
 - **rclone 状态看板**：独立的 `dashboard/` Next.js 应用
 - **一键安装**、默认配置 `~/.config/rrclone/rrclone.conf`
@@ -67,11 +69,12 @@ Windows 没有 bash 一键脚本，请从 [Releases](https://github.com/RandallA
 - 115 Drive [:page_facing_up:](https://rclone.org/115/)
 - 1Fichier [:page_facing_up:](https://rclone.org/fichier/)
 - Akamai Netstorage [:page_facing_up:](https://rclone.org/netstorage/)
-- Alibaba Cloud (Aliyun) Object Storage System (OSS) [:page_facing_up:](https://rclone.org/s3/#alibaba-oss)
+- Alibaba Cloud (Aliyun) Object Storage System (OSS) [:page_facing_up:](https://rclone.org/oss/)
 - Amazon S3 [:page_facing_up:](https://rclone.org/s3/)
 - ArvanCloud Object Storage (AOS) [:page_facing_up:](https://rclone.org/s3/#arvan-cloud-object-storage-aos)
 - Bizfly Cloud Simple Storage [:page_facing_up:](https://rclone.org/s3/#bizflycloud)
 - Backblaze B2 [:page_facing_up:](https://rclone.org/b2/)
+- Baidu Netdisk [:page_facing_up:](https://rclone.org/baidu/)
 - Box [:page_facing_up:](https://rclone.org/box/)
 - Ceph [:page_facing_up:](https://rclone.org/s3/#ceph)
 - China Mobile Ecloud Elastic Object Storage (EOS) [:page_facing_up:](https://rclone.org/s3/#china-mobile-ecloud-eos)
@@ -170,6 +173,7 @@ Windows 没有 bash 一键脚本，请从 [Releases](https://github.com/RandallA
 - Tencent Cloud Object Storage (COS) [:page_facing_up:](https://rclone.org/s3/#tencent-cos)
 - Uloz.to [:page_facing_up:](https://rclone.org/ulozto/)
 - US3 Object Storage [:page_facing_up:](https://rclone.org/s3/#us3)
+- Volcengine TOS [:page_facing_up:](https://rclone.org/tos/)
 - Wasabi [:page_facing_up:](https://rclone.org/s3/#wasabi)
 - WebDAV [:page_facing_up:](https://rclone.org/webdav/)
 - Yandex Disk [:page_facing_up:](https://rclone.org/yandex/)

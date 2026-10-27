@@ -1,0 +1,32 @@
+name: Volcengine
+description: Volcengine Object Storage (TOS / 火山引擎对象存储)
+region:
+  cn-beijing: China North 2 (Beijing)
+  cn-shanghai: China East 2 (Shanghai)
+  cn-guangzhou: China South 1 (Guangzhou)
+  cn-hongkong: China Hong Kong
+  ap-southeast-1: Asia Pacific Southeast (Johor)
+endpoint:
+  tos-s3-cn-beijing.volces.com: China North 2 (Beijing)
+  tos-s3-cn-shanghai.volces.com: China East 2 (Shanghai)
+  tos-s3-cn-guangzhou.volces.com: China South 1 (Guangzhou)
+  tos-s3-cn-hongkong.volces.com: China Hong Kong
+  tos-s3-ap-southeast-1.volces.com: Asia Pacific Southeast (Johor)
+location_constraint:
+  cn-beijing: China North 2 (Beijing)
+  cn-shanghai: China East 2 (Shanghai)
+  cn-guangzhou: China South 1 (Guangzhou)
+  cn-hongkong: China Hong Kong
+  ap-southeast-1: Asia Pacific Southeast (Johor)
+acl: {}
+storage_class:
+  '': Default
+  STANDARD: Standard storage
+  IA: Infrequent access
+  INTELLIGENT_TIERING: Intelligent tiering
+  ARCHIVE_FR: Archive flash restore
+  COLD_ARCHIVE: Cold archive
+bucket_acl: true
+quirks:
+  force_path_style: false
+  list_version: 2

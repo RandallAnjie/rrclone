@@ -1,0 +1,28 @@
+backend: oss
+name: Alibaba Cloud OSS
+tier: Tier 1
+maintainers: External
+features_score: 6
+integration_tests: Unknown
+data_integrity: Hash
+performance: High
+adoption: Widely used
+docs: Full
+security: High
+virtual: false
+remote: 'TestOSS:'
+features:
+- BucketBased
+- BucketBasedRootOK
+- Copy
+- ListP
+- ListR
+- OpenChunkWriter
+- Purge
+- PutStream
+- PublicLink
+- ReadMimeType
+- WriteMimeType
+hashes:
+- md5
+precision: 1

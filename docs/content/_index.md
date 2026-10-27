@@ -115,10 +115,11 @@ WebDAV or S3, that work out of the box.)
 {{< provider name="115 Drive" home="https://115.com/" config="/115/" start="true">}}
 {{< provider name="1Fichier" home="https://1fichier.com/" config="/fichier/" >}}
 {{< provider name="Akamai Netstorage" home="https://www.akamai.com/us/en/products/media-delivery/netstorage.jsp" config="/netstorage/" >}}
-{{< provider name="Alibaba Cloud (Aliyun) Object Storage System (OSS)" home="https://www.alibabacloud.com/product/oss/" config="/s3/#alibaba-oss" >}}
+{{< provider name="Alibaba Cloud (Aliyun) Object Storage System (OSS)" home="https://www.alibabacloud.com/product/oss/" config="/oss/" >}}
 {{< provider name="Amazon S3" home="https://aws.amazon.com/s3/" config="/s3/" >}}
 {{< provider name="Bizfly Cloud Simple Storage" home="https://bizflycloud.vn/" config="/s3/#bizflycloud" >}}
 {{< provider name="Backblaze B2" home="https://www.backblaze.com/cloud-storage" config="/b2/" >}}
+{{< provider name="Baidu Netdisk" home="https://pan.baidu.com/" config="/baidu/" >}}
 {{< provider name="Box" home="https://www.box.com/" config="/box/" >}}
 {{< provider name="Ceph" home="http://ceph.com/" config="/s3/#ceph" >}}
 {{< provider name="China Mobile Ecloud Elastic Object Storage (EOS)" home="https://ecloud.10086.cn/home/product-introduction/eos/" config="/s3/#china-mobile-ecloud-eos" >}}
@@ -222,6 +223,7 @@ WebDAV or S3, that work out of the box.)
 {{< provider name="Tencent Cloud Object Storage (COS)" home="https://intl.cloud.tencent.com/product/cos" config="/s3/#tencent-cos" >}}
 {{< provider name="Uloz.to" home="https://uloz.to" config="/ulozto/" >}}
 {{< provider name="US3" home="https://www.ucloud.cn/site/product/ufile.html" config="/s3/#us3" >}}
+{{< provider name="Volcengine TOS" home="https://www.volcengine.com/product/tos" config="/tos/" >}}
 {{< provider name="Wasabi" home="https://wasabi.com/" config="/s3/#wasabi" >}}
 {{< provider name="WebDAV" home="https://en.wikipedia.org/wiki/WebDAV" config="/webdav/" >}}
 {{< provider name="Yandex Disk" home="https://disk.yandex.com/" config="/yandex/" >}}

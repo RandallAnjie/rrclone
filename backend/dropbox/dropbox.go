@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"path"
 	"regexp"
 	"strings"
@@ -1555,7 +1556,7 @@ func (f *Fs) PublicLink(ctx context.Context, remote string, expire fs.Duration, 
 	if err == nil {
 		switch res := linkRes.(type) {
 		case *sharing.FileLinkMetadata:
-			link = res.Url
+			link = fileShareToDirect(res.Url)
 		case *sharing.FolderLinkMetadata:
 			link = res.Url
 		default:
@@ -1563,6 +1564,18 @@ func (f *Fs) PublicLink(ctx context.Context, remote string, expire fs.Duration, 
 		}
 	}
 	return
+}
+
+// fileShareToDirect turns a Dropbox www share URL into a direct download URL (dl=1).
+func fileShareToDirect(shareURL string) string {
+	u, err := url.Parse(shareURL)
+	if err != nil || u.Host == "" {
+		return shareURL
+	}
+	q := u.Query()
+	q.Set("dl", "1")
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // DirMove moves src, srcRemote to this remote at dstRemote

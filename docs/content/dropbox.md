@@ -701,7 +701,9 @@ dropbox:dir` will return the error `Failed to purge: There are too
 many files involved in this operation`.  As a work-around do an
 `rclone delete dropbox:dir` followed by an `rclone rmdir dropbox:dir`.
 
-When using `rclone link` you'll need to set `--expire` if using a
+When using `rclone link` on a **file**, rclone returns a direct
+download URL (`dl=1`) so wget/curl can fetch the bytes. Folder links
+stay as the Dropbox preview page. You'll need to set `--expire` if using a
 non-personal account otherwise the visibility may not be correct.
 (Note that `--expire` isn't supported on personal accounts). See the
 [forum discussion](https://forum.rclone.org/t/rclone-link-dropbox-permissions/23211)

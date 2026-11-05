@@ -30,6 +30,7 @@ Rclone *("rsync for cloud storage")* 是一个用于在各种云存储之间同�
 
 - **自定义 API**：Drive / Dropbox / Photos / Box / OneDrive 可把官方 API 主机换成反代。Drive 要换三个地址（授权、token、API）
 - **115 网盘**：浏览器 cookie + web API
+- **文件直链**：`rclone link` 对 115、Google Drive、Dropbox、OneDrive、S3 给出可 wget 的下载地址
 - **Google Drive 多 OAuth 账号轮换**：`--drive-oauth-account-files`
 - **rclone 状态看板**：独立的 `dashboard/` Next.js 应用
 - **一键安装**、默认配置 `~/.config/rrclone/rrclone.conf`

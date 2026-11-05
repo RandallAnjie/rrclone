@@ -10,6 +10,7 @@ import {
 } from "react";
 import { normalizeHostUrl } from "@/lib/rc/format";
 import {
+  applyHostDraft,
   createHostId,
   defaultHosts,
   HOSTS_STORAGE_KEY,
@@ -19,15 +20,9 @@ import {
   saveHosts,
   saveSelectedHostId,
   SELECTED_HOST_STORAGE_KEY,
+  type HostDraft,
 } from "@/lib/rc/hosts";
 import type { Host } from "@/lib/rc/types";
-
-type HostDraft = {
-  name: string;
-  url: string;
-  user?: string;
-  pass?: string;
-};
 
 type HostContextValue = {
   hosts: Host[];
@@ -121,17 +116,7 @@ export function HostProvider({ children }: { children: ReactNode }) {
 
   const updateHost = useCallback(
     (id: string, draft: HostDraft) => {
-      const next = hosts.map((item) =>
-        item.id === id
-          ? {
-              ...item,
-              name: draft.name.trim() || item.name,
-              url: item.locked ? item.url : normalizeHostUrl(draft.url),
-              user: draft.user?.trim() || undefined,
-              pass: draft.pass || undefined,
-            }
-          : item,
-      );
+      const next = hosts.map((item) => (item.id === id ? applyHostDraft(item, draft) : item));
       persist(next, selectedId);
     },
     [hosts, persist, selectedId],

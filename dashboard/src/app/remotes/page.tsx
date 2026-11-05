@@ -76,6 +76,7 @@ export default function RemotesPage() {
   return (
     <MotionPage>
       <PageHeader
+        kicker="存储"
         title="远程"
         description="读取 config/dump，并尝试 operations/about 拿用量。token、secret、password 会自动打码。"
         meta={<LiveDot active={Boolean(dump.data)} label="8 秒刷新配置" />}
@@ -122,6 +123,7 @@ export default function RemotesPage() {
               </Widget>
             </Rise>
           </Stagger>
+          <div className="table-shell">
           <Table>
             <Table.ScrollContainer>
               <Table.Content aria-label="rclone 远程">
@@ -183,6 +185,7 @@ export default function RemotesPage() {
               </Table.Content>
             </Table.ScrollContainer>
           </Table>
+          </div>
         </div>
       ) : null}
     </MotionPage>

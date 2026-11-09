@@ -220,6 +220,11 @@ func NewTransportCustom(ctx context.Context, customize func(*http.Transport)) *T
 	// This also means we get new stuff when it gets added to go
 	t := new(http.Transport)
 	structs.SetDefaults(t, http.DefaultTransport.(*http.Transport))
+	// Once http.DefaultTransport has been used, Go 1.27+ leaves a stub
+	// "h2" entry in its TLSNextProto which errors if called. Don't
+	// inherit it, otherwise transports with their own DialTLSContext
+	// (e.g. drive direct mode) fail on HTTP/2 connections.
+	t.TLSNextProto = nil
 	if ci.HTTPProxy != "" {
 		proxyURL, err := url.Parse(ci.HTTPProxy)
 		if err != nil {

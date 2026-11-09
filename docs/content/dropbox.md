@@ -108,18 +108,29 @@ will take an extra HTTP transaction so it should be avoided.
 
 ### Custom API endpoint
 
-rclone talks to Dropbox at `https://api.dropboxapi.com` and uploads
-or downloads via `https://content.dropboxapi.com`. If those hosts are
-blocked, set `endpoint` and `content_endpoint` to reverse proxies.
+rclone talks to Dropbox on three hosts. If they are blocked, point
+each at a reverse proxy:
 
-If `endpoint` is an `api.` host and `content_endpoint` is empty, rclone
-uses the matching `content.` host.
+| Purpose | Default | Option |
+| --- | --- | --- |
+| API calls | `https://api.dropboxapi.com` | `endpoint` |
+| Uploads and downloads | `https://content.dropboxapi.com` | `content_endpoint` |
+| Change polling (`--poll-interval`, e.g. mount) | `https://notify.dropboxapi.com` | `notify_endpoint` |
 
-OAuth uses different hosts. Override those with the existing
-`auth_url` and `token_url` options:
+If `endpoint` is an `api.` host, a blank `content_endpoint` or
+`notify_endpoint` becomes the matching `content.` or `notify.` host.
+Otherwise they share `endpoint`, which suits a single proxy that
+routes by path.
 
-- `auth_url`: reverse proxy of `https://www.dropbox.com/oauth2/authorize`
-- `token_url`: reverse proxy of `https://api.dropboxapi.com/oauth2/token`
+OAuth uses two more URLs:
+
+- `token_url`: refreshes tokens. If it is blank and `endpoint` is set,
+  rclone uses `endpoint` + `/oauth2/token`, since
+  `api.dropboxapi.com` serves that too. So at run time only the
+  `api.` proxy is needed to keep tokens fresh.
+- `auth_url`: the browser login page
+  (`https://www.dropbox.com/oauth2/authorize`). It is only used by
+  `rclone config`, so set it only if your browser can't reach it.
 
 Example:
 
@@ -129,11 +140,71 @@ type = dropbox
 client_id = YOUR_APP_KEY
 client_secret = YOUR_APP_SECRET
 token = {"access_token":"..."}
-auth_url = https://www.dropbox.example.com/oauth2/authorize
-token_url = https://api.dropbox.example.com/oauth2/token
 endpoint = https://api.dropbox.example.com
 content_endpoint = https://content.dropbox.example.com
+notify_endpoint = https://notify.dropbox.example.com
 ```
+
+### OAuth account rotation
+
+Dropbox rate limits (`too_many_requests`) apply per app and per user.
+With `oauth_account_files` rclone can rotate between several OAuth
+accounts and keep going when one is rate limited.
+
+Every account must reach the **same files**. That means either:
+
+- the same Dropbox account authorised under several App Keys (create
+  extra apps in the [App Console](https://www.dropbox.com/developers/apps)),
+  or
+- several members of the same team, using the team space (a path
+  starting with `/`, or `root_namespace`).
+
+rclone checks this when switching, and skips an account that belongs
+to a different Dropbox user or team.
+
+Each file holds one account, either the bare token JSON (what rclone
+stores under `token`), or a structured file which carries that
+account's own app:
+
+```json
+{
+  "client_id": "APP_KEY",
+  "client_secret": "APP_SECRET",
+  "token": {"access_token": "...", "token_type": "bearer", "refresh_token": "...", "expiry": "..."}
+}
+```
+
+To make one, run `rclone authorize dropbox APP_KEY APP_SECRET` and
+put the token it prints under `token`. Leave the expiry out, or set it
+to the zero time, to force a refresh on first use.
+
+```ini
+[dropbox]
+type = dropbox
+oauth_account_files = ~/.config/rrclone/dropbox-accounts/
+oauth_account_cooldown = 5m
+```
+
+`oauth_account_files` takes a comma or newline separated list of
+files, directories (every `*.json` inside, sorted) and glob patterns.
+The first file replaces the remote's own `token`, and refreshed tokens
+are saved back to each file.
+
+rclone switches to the next account when:
+
+- Dropbox returns HTTP 429 `too_many_requests`. A
+  `too_many_write_operations` error is lock contention on the folder,
+  which another account can't fix, so it is retried normally.
+- Dropbox returns HTTP 401 (for example a revoked token).
+- the refresh token is rejected.
+
+The failing account then rests for `oauth_account_cooldown` (default
+5m), or for Dropbox's `Retry-After` if that is longer. Most requests
+are retried on the new account straight away. Upload chunks are
+retried by the normal upload retry, without waiting for
+`Retry-After`. When every account is resting, rclone falls back to
+honouring `Retry-After`. Set `oauth_account_cooldown = 0` to turn
+rotation off. Switches are logged at INFO level.
 
 ### Modification times and hashes
 

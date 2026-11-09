@@ -42,6 +42,15 @@ var (
 	PassConfigKeyForDaemonization = false
 )
 
+// configKeyFileEnv returns the key file handed over by a parent
+// process, preferring _RRCLONE_CONFIG_KEY_FILE.
+func configKeyFileEnv() string {
+	if keyFile := os.Getenv("_RRCLONE_CONFIG_KEY_FILE"); keyFile != "" {
+		return keyFile
+	}
+	return os.Getenv("_RCLONE_CONFIG_KEY_FILE")
+}
+
 // IsEncrypted returns true if the config file is encrypted
 func IsEncrypted() bool {
 	return len(configKey) > 0
@@ -87,7 +96,7 @@ func Decrypt(b io.ReadSeeker) (io.Reader, error) {
 
 	// A key file named by _RCLONE_CONFIG_KEY_FILE is a key handed over by a
 	// parent process, so the password must not be asked for again here.
-	if len(configKey) == 0 && os.Getenv("_RCLONE_CONFIG_KEY_FILE") == "" {
+	if len(configKey) == 0 && configKeyFileEnv() == "" {
 		pass, err := GetPasswordCommand(ctx)
 		if err != nil {
 			return nil, err
@@ -135,10 +144,7 @@ func Decrypt(b io.ReadSeeker) (io.Reader, error) {
 
 	var out []byte
 	for {
-		envKeyFile := os.Getenv("_RRCLONE_CONFIG_KEY_FILE")
-		if len(envKeyFile) == 0 {
-			envKeyFile = os.Getenv("_RCLONE_CONFIG_KEY_FILE")
-		}
+		envKeyFile := configKeyFileEnv()
 		// Only a process without a key of its own consumes the key file, so
 		// that a process which wrote one for its child leaves it in place.
 		if len(configKey) == 0 && len(envKeyFile) > 0 {

@@ -82,6 +82,7 @@ func TestConfigLoadEncryptedWithPassCommandAndDaemon(t *testing.T) {
 	require.NoError(t, config.SetConfigPath("./testdata/encrypted.conf"))
 	config.PassConfigKeyForDaemonization = true
 	t.Setenv("_RCLONE_CONFIG_KEY_FILE", "")
+	t.Setenv("_RRCLONE_CONFIG_KEY_FILE", "")
 	defer func() {
 		assert.NoError(t, config.SetConfigPath(oldConfigPath))
 		config.ClearConfigPassword()

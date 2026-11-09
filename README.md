@@ -31,10 +31,11 @@ Rclone *("rsync for cloud storage")* 是一个用于在各种云存储之间同�
 - **自定义 API**：Drive / Dropbox / Photos / Box / OneDrive 可把官方 API 主机换成反代。Drive 要换三个地址（授权、token、API）
 - **115 网盘**：浏览器 cookie + web API
 - **Google Drive 多 OAuth 账号轮换**：`--drive-oauth-account-files`
+- **Dropbox 多 OAuth 账号 / App Key 轮换**：`--dropbox-oauth-account-files`，限流自动切号
 - **rclone 状态看板**：独立的 `dashboard/` Next.js 应用
 - **一键安装**、默认配置 `~/.config/rrclone/rrclone.conf`
 
-Google Drive 多账号轮换的细节仍在 Drive 文档的 **“OAuth account rotation”** 章节。看板启动方式见 [dashboard/README.md](dashboard/README.md)。
+Google Drive / Dropbox 多账号轮换的细节分别在 Drive、Dropbox 文档的 **“OAuth account rotation”** 章节。看板启动方式见 [dashboard/README.md](dashboard/README.md)。
 
 ## 安装（从官方 rclone 一键切到 rrclone）
 
@@ -66,21 +67,25 @@ Windows 没有 bash 一键脚本，请从 [Releases](https://github.com/RandallA
 
 - 115 Drive [:page_facing_up:](https://rclone.org/115/)
 - 1Fichier [:page_facing_up:](https://rclone.org/fichier/)
+- Abrha Storage [:page_facing_up:](https://rclone.org/s3/#abrhastorage)
 - Akamai Netstorage [:page_facing_up:](https://rclone.org/netstorage/)
 - Alibaba Cloud (Aliyun) Object Storage System (OSS) [:page_facing_up:](https://rclone.org/s3/#alibaba-oss)
 - Amazon S3 [:page_facing_up:](https://rclone.org/s3/)
 - ArvanCloud Object Storage (AOS) [:page_facing_up:](https://rclone.org/s3/#arvan-cloud-object-storage-aos)
+- Autonomys Auto Drive [:page_facing_up:](https://rclone.org/s3/#autonomys)
 - Bizfly Cloud Simple Storage [:page_facing_up:](https://rclone.org/s3/#bizflycloud)
 - Backblaze B2 [:page_facing_up:](https://rclone.org/b2/)
 - Box [:page_facing_up:](https://rclone.org/box/)
 - Ceph [:page_facing_up:](https://rclone.org/s3/#ceph)
 - China Mobile Ecloud Elastic Object Storage (EOS) [:page_facing_up:](https://rclone.org/s3/#china-mobile-ecloud-eos)
 - Citrix ShareFile [:page_facing_up:](https://rclone.org/sharefile/)
+- Clever Cloud Cellar [:page_facing_up:](https://rclone.org/s3/#clever-cloud-cellar)
 - Cloudflare R2 [:page_facing_up:](https://rclone.org/s3/#cloudflare-r2)
 - Cloudinary [:page_facing_up:](https://rclone.org/cloudinary/)
 - Cubbit DS3 [:page_facing_up:](https://rclone.org/s3/#Cubbit)
 - DigitalOcean Spaces [:page_facing_up:](https://rclone.org/s3/#digitalocean-spaces)
 - Digi Storage [:page_facing_up:](https://rclone.org/koofr/#digi-storage)
+- dosya.dev [:page_facing_up:](https://rclone.org/dosya/)
 - Dreamhost [:page_facing_up:](https://rclone.org/s3/#dreamhost)
 - Drime [:page_facing_up:](https://rclone.org/s3/#drime)
 - Dropbox [:page_facing_up:](https://rclone.org/dropbox/)
@@ -112,8 +117,11 @@ Windows 没有 bash 一键脚本，请从 [Releases](https://github.com/RandallA
 - Jottacloud [:page_facing_up:](https://rclone.org/jottacloud/)
 - IBM COS S3 [:page_facing_up:](https://rclone.org/s3/#ibm-cos-s3)
 - Impossible Cloud [:page_facing_up:](https://rclone.org/s3/#impossible-cloud)
+- Infomaniak Swiss Backup (S3) [:page_facing_up:](https://rclone.org/s3/#infomaniak)
+- Infomaniak Swiss Backup (Swift) [:page_facing_up:](https://rclone.org/swift/)
 - Intercolo Object Storage [:page_facing_up:](https://rclone.org/s3/#intercolo)
 - IONOS Cloud [:page_facing_up:](https://rclone.org/s3/#ionos)
+- kDrive [:page_facing_up:](https://rclone.org/kdrive/)
 - Koofr [:page_facing_up:](https://rclone.org/koofr/)
 - Leviia Object Storage [:page_facing_up:](https://rclone.org/s3/#leviia)
 - Liara Object Storage [:page_facing_up:](https://rclone.org/s3/#liara-object-storage)
@@ -129,6 +137,7 @@ Windows 没有 bash 一键脚本，请从 [Releases](https://github.com/RandallA
 - Microsoft Azure Files Storage [:page_facing_up:](https://rclone.org/azurefiles/)
 - Microsoft OneDrive [:page_facing_up:](https://rclone.org/onedrive/)
 - Minio [:page_facing_up:](https://rclone.org/s3/#minio)
+- Neon Object Storage [:page_facing_up:](https://rclone.org/s3/#neon)
 - Nextcloud [:page_facing_up:](https://rclone.org/webdav/#nextcloud)
 - Blomp Cloud Storage [:page_facing_up:](https://rclone.org/swift/)
 - OpenDrive [:page_facing_up:](https://rclone.org/opendrive/)
@@ -152,6 +161,7 @@ Windows 没有 bash 一键脚本，请从 [Releases](https://github.com/RandallA
 - Quatrix [:page_facing_up:](https://rclone.org/quatrix/)
 - Rackspace Cloud Files [:page_facing_up:](https://rclone.org/swift/)
 - RackCorp Object Storage [:page_facing_up:](https://rclone.org/s3/#RackCorp)
+- RelAix.Storage [:page_facing_up:](https://rclone.org/s3/#relaix)
 - rsync.net [:page_facing_up:](https://rclone.org/sftp/#rsync-net)
 - Scaleway [:page_facing_up:](https://rclone.org/s3/#scaleway)
 - Scality (RING / ARTESCA) [:page_facing_up:](https://rclone.org/s3/#scality)

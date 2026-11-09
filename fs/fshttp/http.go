@@ -25,6 +25,7 @@ import (
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/accounting"
 	"github.com/rclone/rclone/fs/config/obscure"
+	"github.com/rclone/rclone/lib/rest"
 	"github.com/rclone/rclone/lib/structs"
 	"github.com/youmark/pkcs8"
 	"golang.org/x/net/publicsuffix"
@@ -219,6 +220,11 @@ func NewTransportCustom(ctx context.Context, customize func(*http.Transport)) *T
 	// This also means we get new stuff when it gets added to go
 	t := new(http.Transport)
 	structs.SetDefaults(t, http.DefaultTransport.(*http.Transport))
+	// Once http.DefaultTransport has been used, Go 1.27+ leaves a stub
+	// "h2" entry in its TLSNextProto which errors if called. Don't
+	// inherit it, otherwise transports with their own DialTLSContext
+	// (e.g. drive direct mode) fail on HTTP/2 connections.
+	t.TLSNextProto = nil
 	if ci.HTTPProxy != "" {
 		proxyURL, err := url.Parse(ci.HTTPProxy)
 		if err != nil {
@@ -591,8 +597,56 @@ func newClientTrace(req *http.Request) *httptrace.ClientTrace {
 	}
 }
 
+// redirectLeavesHost reports whether req is a redirect hop in a
+// chain which has visited a host other than that of the original
+// request, or downgraded an HTTPS request to plaintext HTTP, at any
+// point.
+//
+// The scheme is checked as well as the host and port since a
+// redirect from https://host:8443/ to http://host:8443/ is the same
+// host but would send the headers in plaintext.
+func redirectLeavesHost(req *http.Request) bool {
+	origin := req
+	for origin.Response != nil && origin.Response.Request != nil {
+		origin = origin.Response.Request
+	}
+	for hop := req; hop != origin; hop = hop.Response.Request {
+		if !rest.SameHost(hop.URL, origin.URL) {
+			return true
+		}
+		if origin.URL.Scheme == "https" && hop.URL.Scheme == "http" {
+			return true
+		}
+	}
+	return false
+}
+
+// isHTTPSDowngrade reports whether req is a plaintext HTTP redirect
+// hop in a chain whose original request was HTTPS.
+func isHTTPSDowngrade(req *http.Request) bool {
+	if req.URL.Scheme != "http" {
+		return false
+	}
+	origin := req
+	for origin.Response != nil && origin.Response.Request != nil {
+		origin = origin.Response.Request
+	}
+	return origin.URL.Scheme == "https"
+}
+
 // RoundTrip implements the RoundTripper interface.
 func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
+	// Refuse HTTPS to HTTP redirects here rather than in
+	// CheckRedirect since backends and libraries replace the client's
+	// CheckRedirect but still use this transport, and any credentials
+	// they set would be sent in cleartext.
+	if !t.ci.AllowHTTPSDowngrade && isHTTPSDowngrade(req) {
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
+		return nil, fmt.Errorf("%w: redirect to %s (use --allow-https-downgrade to follow it)", rest.ErrHTTPSDowngrade, req.URL.Redacted())
+	}
+
 	// Check if certificates are being used and the certificates are expired
 	if isCertificateExpired(t.TLSClientConfig) {
 		t.reloadCertificates()
@@ -602,9 +656,16 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 	accounting.LimitTPS(req.Context())
 	// Force user agent
 	req.Header.Set("User-Agent", t.userAgent)
-	// Set user defined headers
-	for _, option := range t.headers {
-		req.Header.Set(option.Key, option.Value)
+	// Set user defined headers, unless redirected elsewhere
+	if redirectLeavesHost(req) {
+		for _, option := range t.headers {
+			fs.Debugf(nil, "redirect to %s leaves the original host or downgrades to HTTP: not sending --header %s", req.URL.Redacted(), option.Key)
+			req.Header.Del(option.Key)
+		}
+	} else {
+		for _, option := range t.headers {
+			req.Header.Set(option.Key, option.Value)
+		}
 	}
 	// Filter the request if required
 	if t.filterRequest != nil {

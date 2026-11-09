@@ -28,6 +28,7 @@ import (
 	"io"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -49,8 +50,10 @@ import (
 	"github.com/rclone/rclone/fs/hash"
 	"github.com/rclone/rclone/fs/list"
 	"github.com/rclone/rclone/fs/operations"
+	"github.com/rclone/rclone/lib/accountrotation"
 	"github.com/rclone/rclone/lib/batcher"
 	"github.com/rclone/rclone/lib/encoder"
+	"github.com/rclone/rclone/lib/env"
 	"github.com/rclone/rclone/lib/multipart"
 	"github.com/rclone/rclone/lib/oauthutil"
 	"github.com/rclone/rclone/lib/pacer"
@@ -153,13 +156,23 @@ var (
 func getOauthConfig(m configmap.Mapper) *oauthutil.Config {
 	impersonate, _ := m.Get("impersonate")
 	impersonateAdmin, _ := m.Get("impersonate_admin")
+	endpoint, _ := m.Get("endpoint")
+	tokenURL := dropboxTokenURL(endpoint)
 
-	// If not impersonating, use standard scopes
-	if impersonate == "" && impersonateAdmin == "" {
+	// If not impersonating or proxying, use the standard config
+	if impersonate == "" && impersonateAdmin == "" && tokenURL == "" {
 		return dropboxConfig
 	}
 	// Make a copy of the config
 	config := *dropboxConfig
+	if tokenURL != "" {
+		// an explicit token_url still wins in oauthutil
+		config.TokenURL = tokenURL
+	}
+	if impersonate == "" && impersonateAdmin == "" {
+		return &config
+	}
+	config.Scopes = slices.Clone(config.Scopes)
 	// Make a copy of the scopes with extra scopes requires appended
 	config.Scopes = append(config.Scopes, "team_data.member")
 	if impersonate != "" {
@@ -311,10 +324,13 @@ This should reverse-proxy https://api.dropboxapi.com. Uploads and
 downloads use content_endpoint (https://content.dropboxapi.com).
 
 If endpoint is an "api." host and content_endpoint is empty, rclone
-uses the matching "content." host. If OAuth is also blocked, set
-auth_url and token_url to the matching proxies of
-https://www.dropbox.com/oauth2/authorize and
-https://api.dropboxapi.com/oauth2/token.`,
+uses the matching "content." host, and likewise "notify." for
+notify_endpoint.
+
+Token refreshes go to endpoint + "/oauth2/token" unless token_url is
+set, since api.dropboxapi.com serves both. The browser login page
+(https://www.dropbox.com/oauth2/authorize) is only used by
+"rclone config"; set auth_url if that is blocked too.`,
 			Advanced: true,
 			Examples: []fs.OptionExample{{
 				Value: "https://api.dropboxapi.com",
@@ -337,6 +353,48 @@ Leave blank to derive it from endpoint when that host starts with
 				Value: "https://content.dropbox.example.com",
 				Help:  "Reverse proxy for content.dropboxapi.com",
 			}},
+		}, {
+			Name: "notify_endpoint",
+			Help: `Custom endpoint for the Dropbox notify API used for change polling.
+
+This should reverse-proxy https://notify.dropboxapi.com, which serves
+list_folder/longpoll for --poll-interval (e.g. rclone mount).
+
+Leave blank to derive it from endpoint when that host starts with
+"api.", or to use the provider default.`,
+			Advanced: true,
+			Examples: []fs.OptionExample{{
+				Value: "https://notify.dropboxapi.com",
+				Help:  "Dropbox notify API (default)",
+			}, {
+				Value: "https://notify.dropbox.example.com",
+				Help:  "Reverse proxy for notify.dropboxapi.com",
+			}},
+		}, {
+			Name: "oauth_account_files",
+			Help: `OAuth account files for automatic account rotation.
+
+Comma or newline separated list of JSON files, directories (all *.json
+files inside) or glob patterns. Each file holds one account, either the
+token blob rclone stores under "token", or a structured file with its
+own Dropbox app:
+
+    {"client_id":"APP_KEY","client_secret":"APP_SECRET","token":{...}}
+
+The first file replaces the remote's own token. When the active account
+is rate limited (too_many_requests) or its token stops working, rclone
+switches to the next one and retries. Refreshed tokens are written
+back to the files.
+
+Every account must reach the same files: the same Dropbox account
+authorised under different App Keys, or members of the same team
+(team space). rclone skips accounts that don't match the first one.` + env.ShellExpandHelp,
+			Advanced: true,
+		}, {
+			Name:     "oauth_account_cooldown",
+			Help:     "How long a rate-limited or failing OAuth account rests before it is used again.\n\nA longer Retry-After from Dropbox wins. 0 disables rotation.",
+			Default:  defaultOAuthAccountCooldown,
+			Advanced: true,
 		}, {
 			Name:     config.ConfigEncoding,
 			Help:     config.ConfigEncodingHelp,
@@ -396,25 +454,28 @@ will fail to download them.
 
 // Options defines the configuration for this backend
 type Options struct {
-	ChunkSize          fs.SizeSuffix        `config:"chunk_size"`
-	Impersonate        string               `config:"impersonate"`
-	ImpersonateAdmin   string               `config:"impersonate_admin"`
-	SharedFiles        bool                 `config:"shared_files"`
-	SharedFolders      bool                 `config:"shared_folders"`
-	SkipSharedFolders  bool                 `config:"skip_shared_folders"`
-	SkipUnownedFolders bool                 `config:"skip_unowned_folders"`
-	BatchMode          string               `config:"batch_mode"`
-	BatchSize          int                  `config:"batch_size"`
-	BatchTimeout       fs.Duration          `config:"batch_timeout"`
-	AsyncBatch         bool                 `config:"async_batch"`
-	PacerMinSleep      fs.Duration          `config:"pacer_min_sleep"`
-	Enc                encoder.MultiEncoder `config:"encoding"`
-	RootNsid           string               `config:"root_namespace"`
-	ExportFormats      fs.CommaSepList      `config:"export_formats"`
-	SkipExports        bool                 `config:"skip_exports"`
-	ShowAllExports     bool                 `config:"show_all_exports"`
-	Endpoint           string               `config:"endpoint"`
-	ContentEndpoint    string               `config:"content_endpoint"`
+	ChunkSize            fs.SizeSuffix        `config:"chunk_size"`
+	Impersonate          string               `config:"impersonate"`
+	ImpersonateAdmin     string               `config:"impersonate_admin"`
+	SharedFiles          bool                 `config:"shared_files"`
+	SharedFolders        bool                 `config:"shared_folders"`
+	SkipSharedFolders    bool                 `config:"skip_shared_folders"`
+	SkipUnownedFolders   bool                 `config:"skip_unowned_folders"`
+	BatchMode            string               `config:"batch_mode"`
+	BatchSize            int                  `config:"batch_size"`
+	BatchTimeout         fs.Duration          `config:"batch_timeout"`
+	AsyncBatch           bool                 `config:"async_batch"`
+	PacerMinSleep        fs.Duration          `config:"pacer_min_sleep"`
+	Enc                  encoder.MultiEncoder `config:"encoding"`
+	RootNsid             string               `config:"root_namespace"`
+	ExportFormats        fs.CommaSepList      `config:"export_formats"`
+	SkipExports          bool                 `config:"skip_exports"`
+	ShowAllExports       bool                 `config:"show_all_exports"`
+	Endpoint             string               `config:"endpoint"`
+	ContentEndpoint      string               `config:"content_endpoint"`
+	NotifyEndpoint       string               `config:"notify_endpoint"`
+	OAuthAccountFiles    string               `config:"oauth_account_files"`
+	OAuthAccountCooldown fs.Duration          `config:"oauth_account_cooldown"`
 }
 
 // Fs represents a remote dropbox server
@@ -435,6 +496,9 @@ type Fs struct {
 	ns             string                // The namespace we are using or "" for none
 	batcher        *batcher.Batcher[*files.UploadSessionFinishArg, *files.FileMetadata]
 	exportExts     []exportExtension
+	m              configmap.Mapper         // config, for making alternate account clients
+	rotator        *accountrotation.Rotator // non-nil if OAuth account rotation is on
+	primary        accountIdentity          // who the first OAuth account is
 }
 
 type exportType int
@@ -573,7 +637,22 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		}
 	}
 
-	oAuthClient, _, err := oauthutil.NewClient(ctx, name, m, getOauthConfig(m))
+	if err := checkEndpoints(opt); err != nil {
+		return nil, fmt.Errorf("dropbox: %w", err)
+	}
+
+	// With OAuth account files the first one replaces the config token
+	accountFiles, err := accountrotation.ParseFiles(opt.OAuthAccountFiles)
+	if err != nil {
+		return nil, fmt.Errorf("dropbox: oauth account files: %w", err)
+	}
+	oauthMapper := m
+	if len(accountFiles) > 0 {
+		oauthMapper = &accountrotation.TokenFileMapper{Base: m, File: accountFiles[0]}
+		fs.Infof(name, "Loaded %d OAuth account file(s) for rotation (cooldown %v)", len(accountFiles), opt.OAuthAccountCooldown)
+	}
+
+	oAuthClient, _, err := oauthutil.NewClient(ctx, name, oauthMapper, getOauthConfig(oauthMapper))
 	if err != nil {
 		return nil, fmt.Errorf("failed to configure dropbox: %w", err)
 	}
@@ -584,8 +663,10 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		name:  name,
 		opt:   *opt,
 		ci:    ci,
+		m:     m,
 		pacer: fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(opt.PacerMinSleep), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
 	}
+	oAuthClient = f.setupRotation(ctx, accountFiles, oAuthClient)
 	batcherOptions := defaultBatcherOptions
 	batcherOptions.Mode = f.opt.BatchMode
 	batcherOptions.Size = f.opt.BatchSize
@@ -673,13 +754,8 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 			return f, nil // our root it empty so we probably want to list shared folders
 		}
 
-		dir := path.Dir(f.root)
-		if dir == "." {
-			dir = f.root
-		}
-
 		// root is not empty so we have find the right shared folder if it exists
-		id, err := f.findSharedFolder(ctx, dir)
+		id, err := f.findSharedFolder(ctx, sharedFolderName(f.root))
 		if err != nil {
 			// if we didn't find the specified shared folder we have to bail out here
 			return nil, err
@@ -987,13 +1063,21 @@ func (f *Fs) listSharedFolders(ctx context.Context, callback func(fs.DirEntry) e
 	return nil
 }
 
+// sharedFolderName returns the shared folder name in root, which is its first
+// path component. root must be the trimmed root as produced by setRoot (no
+// leading slash).
+func sharedFolderName(root string) string {
+	name, _, _ := strings.Cut(root, "/")
+	return name
+}
+
 // findSharedFolder find the id for a given shared folder name
 // somewhat annoyingly there is no endpoint to query a shared folder by it's name
 // so our only option is to iterate over all shared folders
 func (f *Fs) findSharedFolder(ctx context.Context, name string) (id string, err error) {
 	errFoundFile := errors.New("found file")
 	err = f.listSharedFolders(ctx, func(entry fs.DirEntry) error {
-		if entry.(*fs.Dir).Remote() == name {
+		if strings.EqualFold(entry.(*fs.Dir).Remote(), name) {
 			id = entry.(*fs.Dir).ID()
 			return errFoundFile
 		}
@@ -1075,7 +1159,7 @@ func (f *Fs) listReceivedFiles(ctx context.Context, callback func(fs.DirEntry) e
 func (f *Fs) findSharedFile(ctx context.Context, name string) (o *Object, err error) {
 	errFoundFile := errors.New("found file")
 	err = f.listReceivedFiles(ctx, func(entry fs.DirEntry) error {
-		if entry.(*Object).remote == name {
+		if strings.EqualFold(entry.(*Object).remote, name) {
 			o = entry.(*Object)
 			return errFoundFile
 		}
@@ -2296,7 +2380,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	} else {
 		err = o.fs.pacer.CallNoRetry(func() (bool, error) {
 			entry, err = o.fs.srv.UploadContext(ctx, &files.UploadArg{CommitInfo: *commitInfo}, in)
-			return shouldRetry(ctx, err)
+			return o.fs.shouldRetry(ctx, err)
 		})
 	}
 	if err != nil {

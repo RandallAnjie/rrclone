@@ -39,9 +39,9 @@ type EcdhCipher struct {
 
 // NewEcdhCipher starts a P224 ECDH session against 115's upload key.
 func NewEcdhCipher() (*EcdhCipher, error) {
-	//nolint:staticcheck // P224 is required by 115's initupload v4 protocol
+	// 115's initupload v4 protocol uses P224, which crypto/ecdh lacks
 	curve := elliptic.P224()
-	priv, x, y, err := elliptic.GenerateKey(curve, rand.Reader)
+	priv, x, y, err := elliptic.GenerateKey(curve, rand.Reader) //nolint:staticcheck // P224 ECDH required by 115
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +55,7 @@ func NewEcdhCipher() (*EcdhCipher, error) {
 
 	rx := new(big.Int).SetBytes(remotePubKey[:p224BaseLen])
 	ry := new(big.Int).SetBytes(remotePubKey[p224BaseLen:])
-	sx, _ := curve.ScalarMult(rx, ry, priv)
+	sx, _ := curve.ScalarMult(rx, ry, priv) //nolint:staticcheck // P224 ECDH required by 115
 	secret := sx.Bytes()
 	if len(secret) < aes.BlockSize {
 		return nil, fmt.Errorf("115 ecdh: short shared secret")

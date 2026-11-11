@@ -53,6 +53,7 @@ import (
 	_ "github.com/rclone/rclone/backend/opendrive"
 	_ "github.com/rclone/rclone/backend/openlist"
 	_ "github.com/rclone/rclone/backend/oracleobjectstorage"
+	_ "github.com/rclone/rclone/backend/pan123"
 	_ "github.com/rclone/rclone/backend/pcloud"
 	_ "github.com/rclone/rclone/backend/pikpak"
 	_ "github.com/rclone/rclone/backend/pixeldrain"

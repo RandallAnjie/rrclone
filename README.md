@@ -30,6 +30,7 @@ Rclone *("rsync for cloud storage")* 是一个用于在各种云存储之间同�
 
 - **自定义 API**：Drive / Dropbox / Photos / Box / OneDrive 可把官方 API 主机换成反代。Drive 要换三个地址（授权、token、API）
 - **115 网盘**：浏览器 cookie + web API
+- **Cloudreve v4**（社区版 + Pro）：密码 / 2FA / OAuth（支持 OIDC 单点登录）登录，分享链接只读访问，Pro 多存储策略选择，按存储策略直传（本机 / 从机 / OneDrive / S3 / KS3 / OSS / COS / OBS / 七牛）和 AES-256-CTR 客户端加密
 - **Google Drive 多 OAuth 账号轮换**：`--drive-oauth-account-files`
 - **Dropbox 多 OAuth 账号 / App Key 轮换**：`--dropbox-oauth-account-files`，限流自动切号
 - **rclone 状态看板**：独立的 `dashboard/` Next.js 应用
@@ -73,6 +74,7 @@ Windows 没有 bash 一键脚本，请从 [Releases](https://github.com/RandallA
 ## Storage providers
 
 - 115 Drive [:page_facing_up:](https://rclone.org/115/)
+- Cloudreve [:page_facing_up:](https://rclone.org/cloudreve/)
 - 1Fichier [:page_facing_up:](https://rclone.org/fichier/)
 - Abrha Storage [:page_facing_up:](https://rclone.org/s3/#abrhastorage)
 - Akamai Netstorage [:page_facing_up:](https://rclone.org/netstorage/)

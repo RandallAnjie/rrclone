@@ -31,6 +31,7 @@ docs = [
 
     # Keep these alphabetical by full name
     "115.md",
+    "123pan.md",
     "fichier.md",
     "alias.md",
     "s3.md",

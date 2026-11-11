@@ -113,6 +113,7 @@ WebDAV or S3, that work out of the box.)
 
 {{< provider_list >}}
 {{< provider name="115 Drive" home="https://115.com/" config="/115/" start="true">}}
+{{< provider name="123 Pan" home="https://www.123pan.com/" config="/123pan/" >}}
 {{< provider name="1Fichier" home="https://1fichier.com/" config="/fichier/" >}}
 {{< provider name="Abrha Storage" home="https://parspack.com/cloud-storage" config="/s3/#abrhastorage" >}}
 {{< provider name="Akamai Netstorage" home="https://www.akamai.com/us/en/products/media-delivery/netstorage.jsp" config="/netstorage/" >}}

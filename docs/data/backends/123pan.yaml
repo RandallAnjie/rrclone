@@ -1,0 +1,24 @@
+backend: "123pan"
+name: 123 Pan
+tier: Tier 3
+maintainers: External
+features_score: 4
+integration_tests: Unknown
+data_integrity: Hash
+performance: Medium
+adoption: Some use
+docs: Full
+security: High
+virtual: false
+remote: 'Test123Pan:'
+features:
+- About
+- CanHaveEmptyDirectories
+- Copy
+- DirMove
+- ListP
+- Move
+- Purge
+hashes:
+- md5
+precision: null

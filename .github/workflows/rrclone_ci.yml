@@ -1,0 +1,139 @@
+---
+# CI for the rrclone fork.
+#
+# The upstream build.yml only runs in rclone/rclone, so this runs the
+# unit tests, a race test of the fork's own packages and lint here. It
+# lives in its own file so upstream syncs never conflict with it.
+
+name: rrclone-ci
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rrclone-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Never pick up a real config on the runner. Don't set RRCLONE_CONFIG:
+  # it would take precedence over the RCLONE_CONFIG tests set themselves.
+  RCLONE_CONFIG: /notfound
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '~1.27.3'
+          check-latest: true
+
+      # Same as the upstream build.yml, for the mount and git-annex tests
+      - name: Install Libraries on Linux
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo modprobe fuse
+          sudo chmod 666 /dev/fuse
+          sudo chown root:$USER /etc/fuse.conf
+          sudo apt-get update
+          sudo apt-get install -y fuse3 libfuse-dev pkg-config git-annex git-annex-remote-rclone nfs-common
+          # A non-setuid fusermount3 in /usr/local/bin shadows the fuse3 one
+          sudo rm -f /usr/local/bin/fusermount /usr/local/bin/fusermount3
+
+      - name: Install Libraries on macOS
+        if: matrix.os == 'macos-latest'
+        run: |
+          unset HOMEBREW_NO_INSTALL_FROM_API
+          for tap in homebrew/core homebrew/cask aws/tap; do
+            if brew tap | grep -qx "$tap"; then
+              brew untap --force "$tap"
+            fi
+          done
+          brew update
+          brew install --cask macfuse
+          brew install git-annex git-annex-remote-rclone
+
+      - name: Install Libraries on Windows
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          choco install -y winfsp
+          echo "CPATH=C:\Program Files\WinFsp\inc\fuse;C:\Program Files (x86)\WinFsp\inc\fuse" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build
+        run: go build ./...
+
+      # The git-annex end to end tests run the rclone binary from PATH
+      - name: Install rclone
+        run: go install .
+
+      - name: Unit tests
+        run: go test ./...
+
+  race:
+    name: race (fork packages)
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '~1.27.3'
+          check-latest: true
+
+      - name: Race tests
+        run: |
+          go test -race \
+            ./lib/accountrotation/... \
+            ./lib/oauthutil/... \
+            ./lib/rest/... \
+            ./fs/config/... \
+            ./fs/fshttp/... \
+            ./backend/115/... \
+            ./backend/box/... \
+            ./backend/drive/... \
+            ./backend/dropbox/... \
+            ./backend/googlephotos/... \
+            ./backend/onedrive/...
+
+  lint:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '~1.27.3'
+          check-latest: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest

@@ -23,6 +23,7 @@ rrclone 是 [rclone](https://rclone.org) 的增强分支。命令、后端和官
 | 环境变量 | 只有 `RCLONE_*` | 先读 `RRCLONE_*`，没有再读 `RCLONE_*` |
 | Google / Dropbox 等官方 API 被墙 | 只能改 OAuth 的 `auth_url` / `token_url`，数据面主机仍写死 | 再加 `endpoint`（以及 Dropbox / Box 的上传主机）走反代 |
 | 115 网盘 | 无 | 用浏览器 cookie 走 web API，不用已停的 OpenAPI |
+| Cloudreve v4（社区版 / Pro） | 只能走 WebDAV | 原生 API：密码 + 2FA / OAuth（含 OIDC）、分享链接、Pro 存储策略选择、各存储策略直传、客户端加密，见 [Cloudreve](/cloudreve/) |
 | Google 被 DNS 污染 / 封锁 | 只能挂代理 | `--drive-direct` 扫描可直连的 Google IP，Drive 流量直接连过去（gdirect 模式） |
 | Google Drive 多 OAuth 账号轮换 | 无 | `--drive-oauth-account-files`，quota / 限流 / `authError` 自动切号 |
 | Dropbox 多 OAuth 账号 / App Key 轮换 | 无 | `--dropbox-oauth-account-files`，`too_many_requests` / 401 / token 失效自动切号 |

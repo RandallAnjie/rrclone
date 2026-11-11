@@ -40,6 +40,7 @@ docs = [
     "cache.md",
     "chunker.md",
     "cloudinary.md",
+    "cloudreve.md",
     "sharefile.md",
     "crypt.md",
     "compress.md",

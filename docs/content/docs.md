@@ -32,7 +32,7 @@ rclone config
 
 See the following for detailed instructions for
 
-- [rrclone fork notes](/rrclone/) - custom API endpoints, 115 Drive, dashboard
+- [rrclone fork notes](/rrclone/) - custom API endpoints, 115 Drive, Cloudreve, dashboard
 - [115 Drive](/115/)
 - [1Fichier](/fichier/)
 - [Akamai Netstorage](/netstorage/)
@@ -45,6 +45,7 @@ See the following for detailed instructions for
 - [Citrix ShareFile](/sharefile/)
 - [Compress](/compress/)
 - [Cloudinary](/cloudinary/)
+- [Cloudreve](/cloudreve/)
 - [Combine](/combine/)
 - [Crypt](/crypt/) - to encrypt other remotes
 - [DigitalOcean Spaces](/s3/#digitalocean-spaces)

@@ -129,6 +129,7 @@ WebDAV or S3, that work out of the box.)
 {{< provider name="Clever Cloud Cellar" home="https://www.clever.cloud/product/cellar-object-storage/" config="/s3/#clever-cloud-cellar" >}}
 {{< provider name="Cloudflare R2" home="https://blog.cloudflare.com/r2-open-beta/" config="/s3/#cloudflare-r2" >}}
 {{< provider name="Cloudinary" home="https://cloudinary.com/" config="/cloudinary/" >}}
+{{< provider name="Cloudreve" home="https://cloudreve.org/" config="/cloudreve/" >}}
 {{< provider name="Cubbit DS3" home="https://cubbit.io/ds3-cloud" config="/s3/#Cubbit" >}}
 {{< provider name="DigitalOcean Spaces" home="https://www.digitalocean.com/products/object-storage/" config="/s3/#digitalocean-spaces" >}}
 {{< provider name="Digi Storage" home="https://storage.rcs-rds.ro/" config="/koofr/#digi-storage" >}}

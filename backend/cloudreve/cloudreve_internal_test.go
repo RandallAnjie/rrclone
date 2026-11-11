@@ -28,7 +28,8 @@ func (s *fakeServer) remote() string {
 
 func newTestFs(t *testing.T, s *fakeServer, root string) *Fs {
 	t.Helper()
-	m := configmap.Simple{"url": s.srv.URL, "email": s.email, "password": obscure.MustObscure(s.password)}
+	// configmap.Simple has no defaults, so set the ones that matter
+	m := configmap.Simple{"url": s.srv.URL, "email": s.email, "password": obscure.MustObscure(s.password), "client_encryption": "true"}
 	f, err := NewFs(context.Background(), "test", root, m)
 	require.NoError(t, err)
 	return f.(*Fs)
@@ -111,6 +112,11 @@ func TestUploadPolicies(t *testing.T) {
 				}
 				s.mu.Lock()
 				assert.Empty(t, s.sessions, "no leftover upload sessions")
+				if encrypt && policy != api.PolicyUpyun {
+					assert.Positive(t, s.encryptedUploads, "uploads were encrypted client side")
+				} else {
+					assert.Zero(t, s.encryptedUploads)
+				}
 				s.mu.Unlock()
 			})
 		}

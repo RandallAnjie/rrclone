@@ -72,11 +72,12 @@ type fakeServer struct {
 	pageSize        int // server side page size cap
 
 	// State
-	access, refresh string
-	accessExpires   time.Time
-	logins          int
-	refreshes       int
-	twoFASessions   map[string]bool
+	access, refresh  string
+	accessExpires    time.Time
+	logins           int
+	encryptedUploads int // finished uploads which were encrypted client side
+	refreshes        int
+	twoFASessions    map[string]bool
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
@@ -560,6 +561,9 @@ func (s *fakeServer) finish(sess *fakeSession, data []byte) error {
 	}
 	if sess.encrypt != nil {
 		data = ctrDecrypt(sess.encrypt, data)
+		if len(data) > 0 {
+			s.encryptedUploads++
+		}
 	}
 	if !s.mkdirAll(parentOf(sess.path)) {
 		return fmt.Errorf("file in the way")

@@ -201,7 +201,7 @@ func newDirectTestServer(t *testing.T) (context.Context, *directTestServer) {
 	return ctx, s
 }
 
-func directGet(t *testing.T, ctx context.Context, opt *Options, url string) (string, error) {
+func directGet(ctx context.Context, t *testing.T, opt *Options, url string) (string, error) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	require.NoError(t, err)
@@ -219,7 +219,7 @@ func TestDirectEndToEnd(t *testing.T) {
 	// 127.0.0.2 refuses: the server only listens on 127.0.0.1.
 	opt := &Options{Direct: true, DirectIPs: fs.CommaSepList{"127.0.0.2", "127.0.0.1"}}
 
-	body, err := directGet(t, ctx, opt, "https://www.googleapis.com:"+s.port+"/drive/v3/files")
+	body, err := directGet(ctx, t, opt, "https://www.googleapis.com:"+s.port+"/drive/v3/files")
 	require.NoError(t, err)
 	assert.Equal(t, "hello www.googleapis.com:"+s.port+" HTTP/2.0", body)
 	assert.Equal(t, "www.googleapis.com", s.lastSNI())
@@ -237,7 +237,7 @@ func TestDirectEndToEnd(t *testing.T) {
 	assert.NoError(t, err, "scan results are cached")
 
 	// Hosts not routed still go through the (broken) proxy.
-	_, err = directGet(t, ctx, opt, "https://oauth2.googleapis.com:"+s.port+"/token")
+	_, err = directGet(ctx, t, opt, "https://oauth2.googleapis.com:"+s.port+"/token")
 	assert.Error(t, err)
 }
 
@@ -250,13 +250,13 @@ func TestDirectSNI(t *testing.T) {
 		{"example.org", "example.org"},
 	} {
 		opt := &Options{Direct: true, DirectIPs: fs.CommaSepList{"127.0.0.1"}, DirectSNI: test.sni}
-		body, err := directGet(t, ctx, opt, "https://www.googleapis.com:"+s.port+"/x")
+		body, err := directGet(ctx, t, opt, "https://www.googleapis.com:"+s.port+"/x")
 		require.NoError(t, err, test.sni)
 		assert.Equal(t, "hello www.googleapis.com:"+s.port+" HTTP/2.0", body)
 		assert.Equal(t, test.want, s.lastSNI())
 
 		// The certificate is still checked against the real hostname.
-		_, err = directGet(t, ctx, opt, "https://drive.google.com:"+s.port+"/x")
+		_, err = directGet(ctx, t, opt, "https://drive.google.com:"+s.port+"/x")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "drive.google.com")
 	}

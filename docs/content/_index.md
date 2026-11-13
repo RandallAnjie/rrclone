@@ -122,6 +122,7 @@ WebDAV or S3, that work out of the box.)
 {{< provider name="Autonomys Auto Drive" home="https://ai3.storage/" config="/s3/#autonomys" >}}
 {{< provider name="Bizfly Cloud Simple Storage" home="https://bizflycloud.vn/" config="/s3/#bizflycloud" >}}
 {{< provider name="Backblaze B2" home="https://www.backblaze.com/cloud-storage" config="/b2/" >}}
+{{< provider name="Baidu Netdisk" home="https://pan.baidu.com/" config="/baidu/" >}}
 {{< provider name="Box" home="https://www.box.com/" config="/box/" >}}
 {{< provider name="Ceph" home="http://ceph.com/" config="/s3/#ceph" >}}
 {{< provider name="China Mobile Ecloud Elastic Object Storage (EOS)" home="https://ecloud.10086.cn/home/product-introduction/eos/" config="/s3/#china-mobile-ecloud-eos" >}}

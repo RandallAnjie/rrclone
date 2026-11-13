@@ -29,6 +29,9 @@ backends:
  - backend:  "cloudreve"
    remote:   "TestCloudreve:"
    fastlist: false
+ - backend:  "baidu"
+   remote:   "TestBaidu:"
+   fastlist: false
  - backend:  "b2"
    remote:   "TestB2:"
    fastlist: true

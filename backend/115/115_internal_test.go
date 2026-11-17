@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -232,5 +233,61 @@ func TestShouldRetryErrno(t *testing.T) {
 	retry, err = shouldRetry(ctx, nil, (&api.BaseResponse{Errno: float64(990002), Error: "login required for something"}).Err())
 	if fserrors.IsFatalError(err) {
 		t.Fatalf("errno 990002 should not be fatal: retry=%v err=%v", retry, err)
+	}
+}
+
+// TestUserAgentReachesServer checks the configured user agent is what
+// 115 sees, for API calls and downloads alike, since 115 ties download
+// links to the agent which asked for them.
+func TestUserAgentReachesServer(t *testing.T) {
+	for _, ua := range []string{"", "MyAgent/1.0"} {
+		var mu sync.Mutex
+		seen := map[string]string{}
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			seen[r.URL.Path] = r.Header.Get("User-Agent")
+			mu.Unlock()
+			switch {
+			case r.URL.Path == "/files/index_info":
+				_, _ = io.WriteString(w, `{"state":true,"data":{"space_info":{"all_total":{"size":1000},"all_use":{"size":100},"all_remain":{"size":900}}}}`)
+			case r.URL.Path == "/files":
+				_, _ = io.WriteString(w, `{"state":true,"count":1,"offset":0,"cid":"0","data":[{"fid":"20","cid":"0","n":"a.txt","s":"1","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","pc":"pick1","te":"1700000001"}]}`)
+			case r.URL.Path == "/files/download":
+				_, _ = io.WriteString(w, `{"state":true,"file_url":"`+tsURL(r, "/dl/a")+`"}`)
+			case r.URL.Path == "/dl/a":
+				_, _ = io.WriteString(w, "x")
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		m := configmap.Simple{"cookie": "UID=u; CID=c; SEID=s; KID=k", "endpoint": ts.URL}
+		want := defaultUA
+		if ua != "" {
+			m["user_agent"] = ua
+			want = ua
+		}
+		ctx := context.Background()
+		fsi, err := NewFs(ctx, "test115", "", m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		obj, err := fsi.NewObject(ctx, "a.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		in, err := obj.Open(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.ReadAll(in)
+		_ = in.Close()
+		ts.Close()
+		mu.Lock()
+		for _, p := range []string{"/files/index_info", "/files", "/files/download", "/dl/a"} {
+			if seen[p] != want {
+				t.Errorf("user_agent=%q: %s sent User-Agent %q, want %q", ua, p, seen[p], want)
+			}
+		}
+		mu.Unlock()
 	}
 }

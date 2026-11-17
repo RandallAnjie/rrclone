@@ -11,7 +11,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -42,6 +41,7 @@ import (
 	"github.com/rclone/rclone/fs/hash"
 	"github.com/rclone/rclone/fs/list"
 	"github.com/rclone/rclone/fs/operations"
+	"github.com/rclone/rclone/lib/accountrotation"
 	"github.com/rclone/rclone/lib/dircache"
 	"github.com/rclone/rclone/lib/encoder"
 	"github.com/rclone/rclone/lib/env"
@@ -1761,6 +1761,14 @@ type accountRotator struct {
 	kind     string // "service account" or "OAuth account"
 	// newClient makes an authorised client for an account file
 	newClient func(ctx context.Context, file string) (*http.Client, error)
+
+	// For rotation/status, protected by statsMu so reports don't wait
+	// for a rotation in progress
+	name       string
+	statsMu    sync.Mutex
+	switches   int64
+	lastSwitch time.Time
+	lastReason string
 }
 
 var errNoAccountAvailable = errors.New("no alternate account available")
@@ -1833,6 +1841,11 @@ func (r *accountRotator) rotate(ctx context.Context, f *Fs, reason string, cause
 		if err == nil {
 			r.cur.Store(&accountState{client: client, file: candidate, gen: st.gen + 1})
 			r.pool.markCooldown(candidate, time.Time{})
+			r.statsMu.Lock()
+			r.switches++
+			r.lastSwitch = time.Now()
+			r.lastReason = reason
+			r.statsMu.Unlock()
 			fs.Infof(f, "Switched %s from %q to %q after Drive error %q", r.kind, formatAccountShort(st.file), formatAccountShort(candidate), reason)
 			return nil
 		}
@@ -1859,215 +1872,6 @@ func (r *accountRotator) switchTo(ctx context.Context, file string) error {
 	return nil
 }
 
-// oauthAccountFileData holds the contents of a structured OAuth account file.
-// When this format is used, per-account client credentials are stored alongside
-// the token so that each account can use its own OAuth application.
-type oauthAccountFileData struct {
-	ClientID     string          `json:"client_id,omitempty"`
-	ClientSecret string          `json:"client_secret,omitempty"`
-	Token        json.RawMessage `json:"token,omitempty"`
-}
-
-// readOAuthAccountFile reads the file at path and returns its parsed contents.
-// Two formats are supported:
-//   - Structured: {"client_id":"…","client_secret":"…","token":{…}}
-//   - Legacy:     the file contains only the raw OAuth token JSON blob
-//
-// When the file contains a top-level "token" JSON object the structured format
-// is assumed and isStructured is true. Otherwise the entire file content is
-// returned as tokenJSON and isStructured is false.
-func readOAuthAccountFile(path string) (clientID, clientSecret, tokenJSON string, isStructured bool, err error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", "", "", false, err
-	}
-	var d oauthAccountFileData
-	if jsonErr := json.Unmarshal(data, &d); jsonErr == nil && len(d.Token) > 0 {
-		compacted := &bytes.Buffer{}
-		if compactErr := json.Compact(compacted, d.Token); compactErr == nil {
-			return d.ClientID, d.ClientSecret, compacted.String(), true, nil
-		}
-		return d.ClientID, d.ClientSecret, string(d.Token), true, nil
-	}
-	return "", "", strings.TrimSpace(string(data)), false, nil
-}
-
-// normalizeTokenExpiry checks the raw OAuth token JSON and, when the "expiry"
-// field is absent or set to the Go zero time ("0001-01-01T00:00:00Z"), replaces
-// it with a time safely in the past ("1970-01-01T00:00:00Z").  This forces the
-// oauth2 library to treat the access_token as expired and obtain a fresh one
-// via the refresh_token, rather than using the stale access_token as-is.
-func normalizeTokenExpiry(tokenJSON string) string {
-	var m map[string]interface{}
-	if err := json.Unmarshal([]byte(tokenJSON), &m); err != nil {
-		return tokenJSON
-	}
-	const zeroExpiry = "0001-01-01T00:00:00Z"
-	const pastExpiry = "1970-01-01T00:00:00Z"
-	expiry, _ := m["expiry"].(string)
-	if expiry == "" || expiry == zeroExpiry {
-		m["expiry"] = pastExpiry
-		if b, err := json.Marshal(m); err == nil {
-			return string(b)
-		}
-	}
-	return tokenJSON
-}
-
-// tokenFileMapper is a configmap.Mapper that reads/writes OAuth credentials
-// from/to a JSON file while delegating all other keys to the base mapper.
-//
-// Two file formats are supported:
-//   - Structured: {"client_id":"…","client_secret":"…","token":{…}}
-//     client_id and client_secret override the base mapper so each account
-//     can use its own OAuth application. Token refreshes update only the
-//     "token" field while preserving the client credentials in the file.
-//   - Legacy: the file contains only the raw OAuth token JSON blob.
-//     Only the token key is served from the file; client_id and client_secret
-//     fall through to the base mapper. This is backward-compatible with files
-//     created by earlier versions of this feature.
-type tokenFileMapper struct {
-	base configmap.Mapper
-	file string
-	mu   sync.Mutex
-}
-
-func (m *tokenFileMapper) Get(key string) (string, bool) {
-	switch key {
-	case config.ConfigToken:
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		_, _, tokenJSON, _, err := readOAuthAccountFile(m.file)
-		if err != nil {
-			return "", false
-		}
-		// If the token has a zero or missing expiry the Go oauth2 library
-		// treats it as never-expiring and uses the (stale) access_token
-		// directly without refreshing.  Force a refresh by replacing the
-		// zero expiry with a time safely in the past.
-		tokenJSON = normalizeTokenExpiry(tokenJSON)
-		return tokenJSON, true
-	case config.ConfigClientID, config.ConfigClientSecret:
-		m.mu.Lock()
-		clientID, clientSecret, _, structured, err := readOAuthAccountFile(m.file)
-		m.mu.Unlock()
-		if err == nil && structured {
-			if key == config.ConfigClientID && clientID != "" {
-				return clientID, true
-			}
-			if key == config.ConfigClientSecret && clientSecret != "" {
-				return clientSecret, true
-			}
-		}
-		return m.base.Get(key)
-	default:
-		return m.base.Get(key)
-	}
-}
-
-func (m *tokenFileMapper) Set(key, value string) {
-	if key != config.ConfigToken {
-		m.base.Set(key, value)
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	clientID, clientSecret, _, structured, err := readOAuthAccountFile(m.file)
-	if err == nil && structured {
-		// Structured format: update only the token field, preserving client credentials.
-		// Compact the token JSON so the inner blob is stored without extra whitespace.
-		compacted := &bytes.Buffer{}
-		if compactErr := json.Compact(compacted, []byte(value)); compactErr != nil {
-			compacted.Reset()
-			compacted.WriteString(value)
-		}
-		d := oauthAccountFileData{
-			ClientID:     clientID,
-			ClientSecret: clientSecret,
-			Token:        json.RawMessage(compacted.Bytes()),
-		}
-		updated, marshalErr := json.MarshalIndent(d, "", "  ")
-		if marshalErr != nil {
-			fs.Errorf(nil, "drive: failed to marshal updated account file %q: %v", m.file, marshalErr)
-			return
-		}
-		if writeErr := os.WriteFile(m.file, updated, 0o600); writeErr != nil {
-			fs.Errorf(nil, "drive: failed to save refreshed token to %q: %v", m.file, writeErr)
-		}
-		return
-	}
-	// Legacy format: the file contains only the raw token JSON blob.
-	if writeErr := os.WriteFile(m.file, []byte(value), 0o600); writeErr != nil {
-		fs.Errorf(nil, "drive: failed to save refreshed token to %q: %v", m.file, writeErr)
-	}
-}
-
-// parseOAuthAccountFiles expands the spec the same way as parseServiceAccountFiles
-// but accepts any file type (not only .json extension filtering is needed for
-// directory expansion).
-func parseOAuthAccountFiles(spec string) ([]string, error) {
-	parts := strings.FieldsFunc(spec, func(r rune) bool {
-		return r == ',' || r == '\n' || r == '\r'
-	})
-	seen := map[string]struct{}{}
-	files := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		expanded, err := expandOAuthAccountSpec(env.ShellExpand(part))
-		if err != nil {
-			return nil, err
-		}
-		for _, file := range expanded {
-			if _, ok := seen[file]; ok {
-				continue
-			}
-			seen[file] = struct{}{}
-			files = append(files, file)
-		}
-	}
-	return files, nil
-}
-
-func expandOAuthAccountSpec(spec string) ([]string, error) {
-	if strings.ContainsAny(spec, "*?[") {
-		matches, err := filepath.Glob(spec)
-		if err != nil {
-			return nil, fmt.Errorf("invalid oauth account glob %q: %w", spec, err)
-		}
-		if len(matches) == 0 {
-			return nil, fmt.Errorf("oauth account glob %q matched no files", spec)
-		}
-		sort.Strings(matches)
-		return matches, nil
-	}
-	info, err := os.Stat(spec)
-	if err != nil {
-		return nil, fmt.Errorf("couldn't access oauth account file %q: %w", spec, err)
-	}
-	if !info.IsDir() {
-		return []string{spec}, nil
-	}
-	entries, err := os.ReadDir(spec)
-	if err != nil {
-		return nil, fmt.Errorf("couldn't read oauth account directory %q: %w", spec, err)
-	}
-	files := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") {
-			continue
-		}
-		files = append(files, filepath.Join(spec, entry.Name()))
-	}
-	if len(files) == 0 {
-		return nil, fmt.Errorf("oauth account directory %q contained no JSON files", spec)
-	}
-	sort.Strings(files)
-	return files, nil
-}
-
 // newServiceAccountClient makes a client for the service account in file
 func (f *Fs) newServiceAccountClient(ctx context.Context, file string) (*http.Client, error) {
 	opt := f.opt
@@ -2082,7 +1886,7 @@ func (f *Fs) newServiceAccountClient(ctx context.Context, file string) (*http.Cl
 
 // newOAuthAccountClient makes a client for the OAuth token in file
 func (f *Fs) newOAuthAccountClient(ctx context.Context, file string) (*http.Client, error) {
-	m := &tokenFileMapper{base: f.m, file: file}
+	m := &accountrotation.TokenFileMapper{Base: f.m, File: file}
 	client, ts, err := oauthutil.NewClientWithBaseClient(ctx, f.name, m, driveConfig, getClient(ctx, &f.opt))
 	if err != nil {
 		return nil, fmt.Errorf("drive: failed when making oauth client from account file %q: %w", file, err)
@@ -2152,7 +1956,7 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 		opt.ServiceAccountFile = serviceAccountFiles[0]
 	}
 
-	oauthAccountFiles, err := parseOAuthAccountFiles(opt.OAuthAccountFiles)
+	oauthAccountFiles, err := accountrotation.ParseFiles(opt.OAuthAccountFiles)
 	if err != nil {
 		return nil, fmt.Errorf("drive: oauth account files: %w", err)
 	}
@@ -2160,7 +1964,7 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 	currentOAuthAccountFile := ""
 	if opt.ServiceAccountCredentials == "" && opt.ServiceAccountFile == "" && !opt.EnvAuth && len(oauthAccountFiles) > 0 {
 		currentOAuthAccountFile = oauthAccountFiles[0]
-		oauthMapper = &tokenFileMapper{base: m, file: currentOAuthAccountFile}
+		oauthMapper = &accountrotation.TokenFileMapper{Base: m, File: currentOAuthAccountFile}
 		fs.Infof(nil, "drive: loaded %d OAuth account files for rotation (cooldown: %v)", len(oauthAccountFiles), opt.OAuthAccountCooldown)
 	}
 
@@ -2218,6 +2022,8 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 	f.client = oAuthClient
 	if f.rotator != nil {
 		f.client = &http.Client{Transport: f.rotator}
+		f.rotator.name = name
+		accountrotation.Register(name, f.rotator)
 	}
 	f.svc, err = drive.NewService(context.Background(), f.driveClientOptions()...)
 	if err != nil {

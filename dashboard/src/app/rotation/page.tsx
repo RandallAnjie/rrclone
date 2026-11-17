@@ -41,7 +41,12 @@ function RotatorCard({ rotator }: { rotator: RotationStatus }) {
   return (
     <Widget>
       <Widget.Header>
-        <Widget.Title>{rotator.name}</Widget.Title>
+        <Widget.Title>
+          {rotator.name}{" "}
+          <Chip size="sm">
+            <Chip.Label>{rotator.kind === "service account" ? "服务账号" : "OAuth"}</Chip.Label>
+          </Chip>
+        </Widget.Title>
         <Widget.Description>
           当前 {accountName(rotator.current)} · 已切换 {rotator.switches ?? 0} 次 · 冷却{" "}
           {formatDuration(rotator.cooldown)}

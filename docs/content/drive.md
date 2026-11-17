@@ -370,6 +370,10 @@ client ID, client secret, and token all change together.
 
 Both formats can be mixed freely within the same `oauth_account_files` list.
 
+`rclone rc rotation/status` and the dashboard show the account in use
+and which accounts are cooling down, for both service account and
+OAuth account rotation.
+
 The easiest way to make a structured file is to authorise in the
 browser and let rclone write it (run it again to renew an account):
 

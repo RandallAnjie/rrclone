@@ -29,6 +29,7 @@ import (
 	"github.com/rclone/rclone/fs/sync"
 	"github.com/rclone/rclone/fstest"
 	"github.com/rclone/rclone/fstest/fstests"
+	"github.com/rclone/rclone/lib/accountrotation"
 	"github.com/rclone/rclone/lib/dircache"
 	"github.com/rclone/rclone/lib/pacer"
 	"github.com/rclone/rclone/lib/random"
@@ -183,7 +184,7 @@ func TestParseOAuthAccountFiles(t *testing.T) {
 	require.NoError(t, os.WriteFile(second, []byte(`{"access_token":"tok2","token_type":"Bearer"}`), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("ignore"), 0o600))
 
-	files, err := parseOAuthAccountFiles(strings.Join([]string{first, dir, filepath.Join(dir, "*.json")}, ","))
+	files, err := accountrotation.ParseFiles(strings.Join([]string{first, dir, filepath.Join(dir, "*.json")}, ","))
 	require.NoError(t, err)
 	assert.Equal(t, []string{first, second}, files)
 }
@@ -196,7 +197,7 @@ func TestTokenFileMapper(t *testing.T) {
 		require.NoError(t, os.WriteFile(tokenFile, []byte(tokenJSON), 0o600))
 
 		base := configmap.Simple{"scope": "drive", "token": "old_token", "client_id": "base_cid", "client_secret": "base_cs"}
-		m := &tokenFileMapper{base: base, file: tokenFile}
+		m := &accountrotation.TokenFileMapper{Base: base, File: tokenFile}
 
 		// Token comes from file, not base
 		v, ok := m.Get("token")
@@ -237,7 +238,7 @@ func TestTokenFileMapper(t *testing.T) {
 		require.NoError(t, os.WriteFile(tokenFile, []byte(structured), 0o600))
 
 		base := configmap.Simple{"scope": "drive", "client_id": "base_cid", "client_secret": "base_cs"}
-		m := &tokenFileMapper{base: base, file: tokenFile}
+		m := &accountrotation.TokenFileMapper{Base: base, File: tokenFile}
 
 		// Token is extracted from the "token" field
 		v, ok := m.Get("token")
@@ -262,7 +263,7 @@ func TestTokenFileMapper(t *testing.T) {
 		newToken := `{"access_token":"newtok","token_type":"Bearer"}`
 		m.Set("token", newToken)
 		// Read back through readOAuthAccountFile which normalises whitespace
-		gotCID, gotCS, gotTok, gotStructured, readErr := readOAuthAccountFile(tokenFile)
+		gotCID, gotCS, gotTok, gotStructured, readErr := accountrotation.ReadFile(tokenFile)
 		require.NoError(t, readErr)
 		assert.True(t, gotStructured)
 		assert.Equal(t, "mycid", gotCID)
@@ -290,7 +291,7 @@ func TestTokenFileMapper(t *testing.T) {
 		require.NoError(t, os.WriteFile(tokenFile, []byte(structured), 0o600))
 
 		base := configmap.Simple{"client_id": "base_cid", "client_secret": "base_cs"}
-		m := &tokenFileMapper{base: base, file: tokenFile}
+		m := &accountrotation.TokenFileMapper{Base: base, File: tokenFile}
 
 		// Token is extracted from the "token" field and missing
 		// expiry is normalized to force a refresh.
@@ -316,7 +317,7 @@ func TestReadOAuthAccountFile(t *testing.T) {
 		f := filepath.Join(dir, "legacy.json")
 		tokenJSON := `{"access_token":"tok","token_type":"Bearer"}`
 		require.NoError(t, os.WriteFile(f, []byte(tokenJSON), 0o600))
-		cid, cs, tok, structured, err := readOAuthAccountFile(f)
+		cid, cs, tok, structured, err := accountrotation.ReadFile(f)
 		require.NoError(t, err)
 		assert.False(t, structured)
 		assert.Equal(t, tokenJSON, tok)
@@ -329,7 +330,7 @@ func TestReadOAuthAccountFile(t *testing.T) {
 		inner := `{"access_token":"tok","token_type":"Bearer"}`
 		content := `{"client_id":"cid","client_secret":"cs","token":` + inner + `}`
 		require.NoError(t, os.WriteFile(f, []byte(content), 0o600))
-		cid, cs, tok, structured, err := readOAuthAccountFile(f)
+		cid, cs, tok, structured, err := accountrotation.ReadFile(f)
 		require.NoError(t, err)
 		assert.True(t, structured)
 		assert.Equal(t, "cid", cid)
@@ -338,7 +339,7 @@ func TestReadOAuthAccountFile(t *testing.T) {
 	})
 
 	t.Run("NotFound", func(t *testing.T) {
-		_, _, _, _, err := readOAuthAccountFile(filepath.Join(dir, "missing.json"))
+		_, _, _, _, err := accountrotation.ReadFile(filepath.Join(dir, "missing.json"))
 		assert.Error(t, err)
 	})
 }

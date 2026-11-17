@@ -173,6 +173,7 @@ export type RotationAccount = {
 
 export type RotationStatus = {
   name: string;
+  kind?: string;
   current?: string;
   cooldown?: number;
   switches?: number;

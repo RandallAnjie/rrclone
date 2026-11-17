@@ -34,6 +34,7 @@ See the following for detailed instructions for
 
 - [rrclone fork notes](/rrclone/) - custom API endpoints, 115 Drive, Cloudreve, dashboard
 - [115 Drive](/115/)
+- [123 Pan](/123pan/)
 - [1Fichier](/fichier/)
 - [Akamai Netstorage](/netstorage/)
 - [Alias](/alias/)

@@ -459,6 +459,9 @@ backends:
  #   ignore:
  #     # This test fails because of a broken bucket in the account!
  #     - TestIntegration/FsMkdir/FsPutFiles/FromRoot/ListR
+ - backend:  "aliyundrive"
+   remote:   "TestAliyunDrive:"
+   fastlist: false
  - backend:  "azureblob"
    remote:   "TestAzureBlob:"
    fastlist: true

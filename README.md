@@ -36,6 +36,7 @@ Rclone *("rsync for cloud storage")* 是一个用于在各种云存储之间同�
 - **OpenList / AList**：原生 API 接入，一个后端访问 OpenList 里挂载的所有网盘（天翼、夸克、移动、迅雷、阿里、百度……）；支持哈希、元数据密码、跨存储复制 / 移动（等待后台任务）
 - **Cloudreve v4**（社区版 + Pro）：密码 / 2FA / OAuth（支持 OIDC 单点登录）登录，分享链接只读访问，Pro 多存储策略选择，按存储策略直传（本机 / 从机 / OneDrive / S3 / KS3 / OSS / COS / OBS / 七牛）和 AES-256-CTR 客户端加密
 - **Google Drive 多 OAuth 账号轮换**：`--drive-oauth-account-files`
+- **OneDrive 多 OAuth 账号 / 应用轮换**：`--onedrive-oauth-account-files`，429 限流 / token 失效自动切号
 - **Dropbox 多 OAuth 账号 / App Key 轮换**：`--dropbox-oauth-account-files`，限流自动切号
 - **rclone 状态看板**：独立的 `dashboard/` Next.js 应用
 - **一键安装**、默认配置 `~/.config/rrclone/rrclone.conf`

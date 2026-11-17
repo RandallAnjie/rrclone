@@ -34,9 +34,11 @@ import (
 	"github.com/rclone/rclone/fs/log"
 	"github.com/rclone/rclone/fs/operations"
 	"github.com/rclone/rclone/fs/walk"
+	"github.com/rclone/rclone/lib/accountrotation"
 	"github.com/rclone/rclone/lib/atexit"
 	"github.com/rclone/rclone/lib/dircache"
 	"github.com/rclone/rclone/lib/encoder"
+	"github.com/rclone/rclone/lib/env"
 	"github.com/rclone/rclone/lib/multipart"
 	"github.com/rclone/rclone/lib/oauthutil"
 	"github.com/rclone/rclone/lib/pacer"
@@ -208,6 +210,27 @@ access token. For example, use v2.1 with a driveAccessTokenV21 token.
 
 This only applies when tenant_url is set.`,
 			Default:  defaultTenantAPIVersion,
+			Advanced: true,
+		}, {
+			Name: "oauth_account_files",
+			Help: `OAuth account files for automatic account rotation.
+
+Comma or newline separated list of JSON files, directories (all *.json
+files inside) or glob patterns. Each file holds one account: the token
+blob rclone stores under "token", or a structured file with its own
+app registration, as written by
+"rclone authorize onedrive CLIENT_ID CLIENT_SECRET --account-file FILE".
+
+The first file replaces the remote's own token. When the active account
+is throttled (HTTP 429) or its token stops working, rclone switches to
+the next one. Every account must be able to reach drive_id: usually
+the same Microsoft account authorised under different app
+registrations.` + env.ShellExpandHelp,
+			Advanced: true,
+		}, {
+			Name:     "oauth_account_cooldown",
+			Help:     "How long a throttled or failing OAuth account rests before it is used again.\n\nA longer Retry-After from Microsoft wins. 0 disables rotation.",
+			Default:  defaultOAuthAccountCooldown,
 			Advanced: true,
 		}, {
 			Name: "chunk_size",
@@ -881,6 +904,8 @@ type Options struct {
 	Enc                     encoder.MultiEncoder `config:"encoding"`
 	MetadataPermissions     rwChoice             `config:"metadata_permissions"`
 	Endpoint                string               `config:"endpoint"`
+	OAuthAccountFiles       string               `config:"oauth_account_files"`
+	OAuthAccountCooldown    fs.Duration          `config:"oauth_account_cooldown"`
 }
 
 // Fs represents a remote OneDrive
@@ -900,6 +925,9 @@ type Fs struct {
 	driveID      string                 // ID to use for querying Microsoft Graph
 	driveType    string                 // https://developer.microsoft.com/en-us/graph/docs/api-reference/v1.0/resources/drive
 	hashType     hash.Type              // type of the hash we are using
+	m            configmap.Mapper       // config, for alternate account clients
+	rotator      *accountrotation.Rotator
+	rootURL      string // URL of the drive
 }
 
 // sharePointClients holds the clients authenticated for SharePoint hosts
@@ -1338,9 +1366,20 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		return nil, err
 	}
 
+	// With OAuth account files the first one replaces the config token
+	accountFiles, err := accountrotation.ParseFiles(opt.OAuthAccountFiles)
+	if err != nil {
+		return nil, fmt.Errorf("onedrive: oauth account files: %w", err)
+	}
+	oauthMapper := m
+	if len(accountFiles) > 0 {
+		oauthMapper = &accountrotation.TokenFileMapper{Base: m, File: accountFiles[0]}
+		fs.Infof(name, "Loaded %d OAuth account file(s) for rotation (cooldown %v)", len(accountFiles), opt.OAuthAccountCooldown)
+	}
+
 	client := fshttp.NewClient(ctx)
 	root = parsePath(root)
-	oAuthClient, ts, err := oauthutil.NewClientWithBaseClient(ctx, name, m, oauthConfig, client)
+	oAuthClient, ts, err := oauthutil.NewClientWithBaseClient(ctx, name, oauthMapper, oauthConfig, client)
 	if err != nil {
 		return nil, fmt.Errorf("failed to configure OneDrive: %w", err)
 	}
@@ -1359,6 +1398,11 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		unAuth:      rest.NewClient(client).SetRoot(rootURL),
 		pacer:       fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(minSleep), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
 		hashType:    QuickXorHashType,
+		m:           m,
+		rootURL:     rootURL,
+	}
+	if apiClient := f.setupRotation(accountFiles, oAuthClient); apiClient != oAuthClient {
+		f.srv = rest.NewClient(apiClient).SetRoot(rootURL)
 	}
 	f.features = (&fs.Features{
 		CaseInsensitive:          true,

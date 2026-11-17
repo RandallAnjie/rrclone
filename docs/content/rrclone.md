@@ -30,6 +30,7 @@ rrclone 是 [rclone](https://rclone.org) 的增强分支。命令、后端和官
 | Cloudreve v4（社区版 / Pro） | 只能走 WebDAV | 原生 API：密码 + 2FA / OAuth（含 OIDC）、分享链接、Pro 存储策略选择、各存储策略直传、客户端加密，见 [Cloudreve](/cloudreve/) |
 | Google 被 DNS 污染 / 封锁 | 只能挂代理 | `--drive-direct` 扫描可直连的 Google IP，Drive 流量直接连过去（gdirect 模式） |
 | Google Drive 多 OAuth 账号轮换 | 无 | `--drive-oauth-account-files`，quota / 限流 / `authError` 自动切号 |
+| OneDrive 多 OAuth 账号 / 应用轮换 | 无 | `--onedrive-oauth-account-files`，429 / token 失效自动切号，见 [OneDrive OAuth account rotation](/onedrive/#oauth-account-rotation) |
 | Dropbox 多 OAuth 账号 / App Key 轮换 | 无 | `--dropbox-oauth-account-files`，`too_many_requests` / 401 / token 失效自动切号 |
 | 本机状态看板 | 无独立 UI | `dashboard/` Next.js，读官方 RC |
 | 一键安装 | `rclone.org/install.sh` | 本仓库 `install.sh`，默认装 `rrclone` 并可选替换 `rclone` 命令 |

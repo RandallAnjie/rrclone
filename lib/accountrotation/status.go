@@ -9,16 +9,28 @@ import (
 	"github.com/rclone/rclone/fs/rc"
 )
 
-// registry holds the latest Rotator made for each remote
+// Reporter reports the state of an account rotation
+type Reporter interface {
+	Status() Status
+}
+
+// registry holds the latest Reporter registered for each remote
 var registry = struct {
 	mu sync.Mutex
-	m  map[string]*Rotator
-}{m: map[string]*Rotator{}}
+	m  map[string]Reporter
+}{m: map[string]Reporter{}}
+
+// Register adds the account rotation of the remote name to the reports
+// of rotation/status, replacing any earlier one of that name. Rotators
+// register themselves; backends with their own rotation call this.
+func Register(name string, r Reporter) {
+	registry.mu.Lock()
+	registry.m[name] = r
+	registry.mu.Unlock()
+}
 
 func register(r *Rotator) {
-	registry.mu.Lock()
-	registry.m[r.name] = r
-	registry.mu.Unlock()
+	Register(r.name, r)
 }
 
 // AccountStatus is the state of one account of a Rotator
@@ -33,6 +45,7 @@ type AccountStatus struct {
 // Status is the state of the account rotation of a remote
 type Status struct {
 	Name       string          `json:"name"`
+	Kind       string          `json:"kind,omitempty"` // e.g. "service account", default OAuth
 	Current    string          `json:"current"`
 	Cooldown   float64         `json:"cooldown"` // seconds
 	Switches   int64           `json:"switches"`
@@ -73,7 +86,7 @@ func (r *Rotator) Status() Status {
 // Statuses reports every remote with account rotation, by name
 func Statuses() []Status {
 	registry.mu.Lock()
-	rotators := make([]*Rotator, 0, len(registry.m))
+	rotators := make([]Reporter, 0, len(registry.m))
 	for _, r := range registry.m {
 		rotators = append(rotators, r)
 	}

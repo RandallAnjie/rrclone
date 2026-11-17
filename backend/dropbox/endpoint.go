@@ -1,25 +1,44 @@
 package dropbox
 
 import (
+	"fmt"
 	"net/url"
 	"strings"
 
 	"github.com/rclone/rclone/lib/rest"
 )
 
-func dropboxCustomRoots(endpoint, contentEndpoint string) (apiRoot, contentRoot string, ok bool) {
-	apiRoot = rest.CanonicalRoot(endpoint)
-	contentRoot = rest.CanonicalRoot(contentEndpoint)
-	if apiRoot == "" && contentRoot == "" {
-		return "", "", false
+const defaultAPIRoot = "https://api.dropboxapi.com"
+
+// dropboxRoots are the API roots to use with custom endpoints
+type dropboxRoots struct {
+	api, content, notify string
+}
+
+// dropboxCustomRoots works out the roots from the endpoint options.
+//
+// Blank content and notify endpoints are derived from an "api." host
+// by swapping the prefix, otherwise they share the api root (which
+// suits a single path-routing proxy). ok is false if nothing is set.
+func dropboxCustomRoots(endpoint, contentEndpoint, notifyEndpoint string) (roots dropboxRoots, ok bool) {
+	roots = dropboxRoots{
+		api:     rest.CanonicalRoot(endpoint),
+		content: rest.CanonicalRoot(contentEndpoint),
+		notify:  rest.CanonicalRoot(notifyEndpoint),
 	}
-	if apiRoot == "" {
-		apiRoot = "https://api.dropboxapi.com"
+	if roots == (dropboxRoots{}) {
+		return roots, false
 	}
-	if contentRoot == "" {
-		contentRoot = deriveSiblingHost(apiRoot, "api.", "content.")
+	if roots.api == "" {
+		roots.api = defaultAPIRoot
 	}
-	return apiRoot, contentRoot, true
+	if roots.content == "" {
+		roots.content = deriveSiblingHost(roots.api, "api.", "content.")
+	}
+	if roots.notify == "" {
+		roots.notify = deriveSiblingHost(roots.api, "api.", "notify.")
+	}
+	return roots, true
 }
 
 func deriveSiblingHost(root, fromPrefix, toPrefix string) string {
@@ -31,24 +50,56 @@ func deriveSiblingHost(root, fromPrefix, toPrefix string) string {
 	return u.String()
 }
 
+// checkEndpoints makes sure the endpoint options are usable URLs
+func checkEndpoints(opt *Options) error {
+	for _, e := range []struct{ name, value string }{
+		{"endpoint", opt.Endpoint},
+		{"content_endpoint", opt.ContentEndpoint},
+		{"notify_endpoint", opt.NotifyEndpoint},
+	} {
+		root := rest.CanonicalRoot(e.value)
+		if root == "" {
+			continue
+		}
+		u, err := url.Parse(root)
+		if err != nil {
+			return fmt.Errorf("invalid %s %q: %w", e.name, e.value, err)
+		}
+		if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("invalid %s %q: want http(s)://host[:port][/path]", e.name, e.value)
+		}
+	}
+	return nil
+}
+
+// dropboxTokenURL returns the OAuth token URL to use with endpoint or
+// "" for the default. api.dropboxapi.com serves /oauth2/token so a
+// proxy for it can refresh tokens too.
+func dropboxTokenURL(endpoint string) string {
+	root := rest.CanonicalRoot(endpoint)
+	if root == "" || root == defaultAPIRoot {
+		return ""
+	}
+	return root + "/oauth2/token"
+}
+
 func dropboxURLGeneratorFromOpt(opt *Options) func(hostType, namespace, route string) string {
-	apiRoot, contentRoot, ok := dropboxCustomRoots(opt.Endpoint, opt.ContentEndpoint)
+	roots, ok := dropboxCustomRoots(opt.Endpoint, opt.ContentEndpoint, opt.NotifyEndpoint)
 	if !ok {
 		return nil
 	}
-	return dropboxURLGenerator(apiRoot, contentRoot)
+	return dropboxURLGenerator(roots)
 }
 
-func dropboxURLGenerator(apiRoot, contentRoot string) func(hostType, namespace, route string) string {
-	notifyRoot := deriveSiblingHost(apiRoot, "api.", "notify.")
+func dropboxURLGenerator(roots dropboxRoots) func(hostType, namespace, route string) string {
 	return func(hostType, namespace, route string) string {
-		root := apiRoot
+		root := roots.api
 		switch hostType {
 		case "content":
-			root = contentRoot
+			root = roots.content
 		case "notify":
-			root = notifyRoot
+			root = roots.notify
 		}
-		return strings.TrimRight(root, "/") + "/2/" + namespace + "/" + route
+		return root + "/2/" + namespace + "/" + route
 	}
 }

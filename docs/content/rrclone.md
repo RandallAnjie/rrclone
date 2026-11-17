@@ -25,6 +25,7 @@ rrclone 是 [rclone](https://rclone.org) 的增强分支。命令、后端和官
 | 115 网盘 | 无 | 用浏览器 cookie 走 web API，不用已停的 OpenAPI |
 | Google 被 DNS 污染 / 封锁 | 只能挂代理 | `--drive-direct` 扫描可直连的 Google IP，Drive 流量直接连过去（gdirect 模式） |
 | Google Drive 多 OAuth 账号轮换 | 无 | `--drive-oauth-account-files`，quota / 限流 / `authError` 自动切号 |
+| Dropbox 多 OAuth 账号 / App Key 轮换 | 无 | `--dropbox-oauth-account-files`，`too_many_requests` / 401 / token 失效自动切号 |
 | 本机状态看板 | 无独立 UI | `dashboard/` Next.js，读官方 RC |
 | 一键安装 | `rclone.org/install.sh` | 本仓库 `install.sh`，默认装 `rrclone` 并可选替换 `rclone` 命令 |
 
@@ -46,6 +47,7 @@ rrclone 是 [rclone](https://rclone.org) 的增强分支。命令、后端和官
 - **Drive 直连**：扫描能连通的 Google IP，Drive API 和上传下载直连，证书仍按真实域名校验，见 [Direct connection](/drive/#direct-connection-to-google-ips)
 - **115 Drive**：浏览器 cookie 登录，列表 / 上传 / 下载 / 秒传，见 [115](/115/)
 - **Drive 多账号**：多个 OAuth token 文件轮换，适合大量上传和挂载，见 [Drive OAuth account rotation](/drive/#oauth-account-rotation)
+- **Dropbox 多账号**：同一个 Dropbox 账号授权给多个 App Key（或同一团队空间的多个成员）轮换着用，见 [Dropbox OAuth account rotation](/dropbox/#oauth-account-rotation)
 - **看板**：传输、远程、任务、挂载、多主机 RC 地址
 
 ## 后端
@@ -115,11 +117,12 @@ endpoint = https://googleapis.example.com
 | 干什么 | 官方 URL | 配置项 |
 | --- | --- | --- |
 | 授权 | `https://www.dropbox.com/oauth2/authorize` | `auth_url` |
-| 换 token | `https://api.dropboxapi.com/oauth2/token` | `token_url` |
+| 换 token | `https://api.dropboxapi.com/oauth2/token` | `token_url`（不填则用 `endpoint` + `/oauth2/token`） |
 | API | `https://api.dropboxapi.com` | `endpoint` |
 | 上传/下载 | `https://content.dropboxapi.com` | `content_endpoint` |
+| 变更通知（mount 的 `--poll-interval`） | `https://notify.dropboxapi.com` | `notify_endpoint` |
 
-`endpoint` 若是 `api.` 开头的主机、且没填 `content_endpoint`，会自动改成对应的 `content.` / `notify.`。
+`endpoint` 若是 `api.` 开头的主机，没填的 `content_endpoint` / `notify_endpoint` 会自动换成对应的 `content.` / `notify.` 主机；否则三者共用 `endpoint`（适合按路径分流的单个反代）。`token_url` 不填时自动用 `endpoint` 的 `/oauth2/token`，所以运行时只需反代 `api.` 一台主机就能刷新 token；`auth_url` 只在 `rclone config` 浏览器登录时用到。
 
 ```ini
 [dropbox]
@@ -129,6 +132,7 @@ auth_url = https://www.dropbox.example.com/oauth2/authorize
 token_url = https://api.dropbox.example.com/oauth2/token
 endpoint = https://api.dropbox.example.com
 content_endpoint = https://content.dropbox.example.com
+notify_endpoint = https://notify.dropbox.example.com
 ```
 
 ### Google Photos

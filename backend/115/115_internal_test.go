@@ -141,7 +141,7 @@ func TestMockListAndDownload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	got, err := io.ReadAll(in)
 	if err != nil {
 		t.Fatal(err)

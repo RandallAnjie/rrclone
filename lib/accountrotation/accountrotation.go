@@ -340,6 +340,13 @@ type Rotator struct {
 	newClient NewClientFunc
 	mu        sync.Mutex // serialises rotations
 	cur       atomic.Pointer[state]
+
+	// For status reports, protected by statsMu so reports don't wait
+	// for a rotation in progress
+	statsMu    sync.Mutex
+	switches   int64
+	lastSwitch time.Time
+	lastReason string
 }
 
 // NewRotator makes a Rotator whose first account is file, already
@@ -347,6 +354,7 @@ type Rotator struct {
 func NewRotator(name string, pool *Pool, cooldown time.Duration, file string, client *http.Client, classify Classifier, newClient NewClientFunc) *Rotator {
 	r := &Rotator{name: name, pool: pool, cooldown: cooldown, classify: classify, newClient: newClient}
 	r.cur.Store(&state{client: client, file: file, gen: 1})
+	register(r)
 	return r
 }
 
@@ -427,6 +435,11 @@ func (r *Rotator) rotate(ctx context.Context, failed *state, v Verdict) bool {
 			continue
 		}
 		r.cur.Store(&state{client: client, file: candidate, gen: failed.gen + 1})
+		r.statsMu.Lock()
+		r.switches++
+		r.lastSwitch = time.Now()
+		r.lastReason = v.Reason
+		r.statsMu.Unlock()
 		fs.Infof(r.name, "%s on OAuth account %q; switched to %q", v.Reason, short(failed.file), short(candidate))
 		return true
 	}

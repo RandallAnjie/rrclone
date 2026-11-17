@@ -313,7 +313,6 @@ func (f *Fs) putOSS(ctx context.Context, init *api.UploadInitResponse, rs io.Rea
 			"x-oss-security-token": token.SecurityToken,
 			"x-oss-callback":       callback,
 			"x-oss-callback-var":   callbackVar,
-			"*User-Agent":          ossUserAgent,
 		},
 		GetBody: func() (io.ReadCloser, error) {
 			if _, err := rs.Seek(0, io.SeekStart); err != nil {

@@ -41,6 +41,7 @@ See the following for detailed instructions for
 - [Archive](/archive/)
 - [Amazon S3](/s3/)
 - [Backblaze B2](/b2/)
+- [Baidu Netdisk](/baidu/)
 - [Box](/box/)
 - [Chunker](/chunker/) - transparently splits large files for other remotes
 - [Citrix ShareFile](/sharefile/)

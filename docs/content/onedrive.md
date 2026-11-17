@@ -1151,6 +1151,37 @@ token_url = https://login.example.com/common/oauth2/v2.0/token
 endpoint = https://graph.example.com
 ```
 
+### OAuth account rotation
+
+Microsoft Graph throttles each app and user separately. With
+`oauth_account_files` rclone rotates between several OAuth accounts and
+keeps going when one is throttled. This is usually the same Microsoft
+account authorised under several app registrations (see
+[Getting your own Client ID and Key](#getting-your-own-client-id-and-key)).
+
+Make one file per app with:
+
+```console
+rclone authorize onedrive CLIENT_ID CLIENT_SECRET --account-file ~/.config/rrclone/onedrive-accounts/app1.json
+```
+
+```ini
+[onedrive]
+type = onedrive
+drive_id = ...
+drive_type = business
+oauth_account_files = ~/.config/rrclone/onedrive-accounts/
+oauth_account_cooldown = 5m
+```
+
+The first file replaces the remote's own token. rclone switches account
+when Microsoft answers 429 (throttled), 401 with a token that doesn't
+work any more, or rejects a refresh token. An account that can't reach
+`drive_id` is skipped. The failing account rests for
+`oauth_account_cooldown`, or Microsoft's `Retry-After` if longer, and
+requests are retried on the new account straight away. `rclone rc
+rotation/status` and the dashboard show which account is in use.
+
 ## Limitations
 
 If you don't use rclone for 90 days the refresh token will

@@ -34,6 +34,7 @@ docs = [
     "123pan.md",
     "fichier.md",
     "alias.md",
+    "aliyundrive.md",
     "s3.md",
     "archive.md",
     "b2.md",

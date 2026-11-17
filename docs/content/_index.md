@@ -118,6 +118,7 @@ WebDAV or S3, that work out of the box.)
 {{< provider name="Abrha Storage" home="https://parspack.com/cloud-storage" config="/s3/#abrhastorage" >}}
 {{< provider name="Akamai Netstorage" home="https://www.akamai.com/us/en/products/media-delivery/netstorage.jsp" config="/netstorage/" >}}
 {{< provider name="Alibaba Cloud (Aliyun) Object Storage System (OSS)" home="https://www.alibabacloud.com/product/oss/" config="/s3/#alibaba-oss" >}}
+{{< provider name="Aliyun Drive" home="https://www.alipan.com/" config="/aliyundrive/" >}}
 {{< provider name="Amazon S3" home="https://aws.amazon.com/s3/" config="/s3/" >}}
 {{< provider name="Autonomys Auto Drive" home="https://ai3.storage/" config="/s3/#autonomys" >}}
 {{< provider name="Bizfly Cloud Simple Storage" home="https://bizflycloud.vn/" config="/s3/#bizflycloud" >}}

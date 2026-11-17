@@ -1,0 +1,24 @@
+backend: "aliyundrive"
+name: Aliyun Drive
+tier: Tier 3
+maintainers: External
+features_score: 4
+integration_tests: Unknown
+data_integrity: Hash
+performance: Medium
+adoption: Some use
+docs: Full
+security: High
+virtual: false
+remote: 'TestAliyunDrive:'
+features:
+- About
+- CanHaveEmptyDirectories
+- Copy
+- DirMove
+- ListP
+- Move
+- Purge
+hashes:
+- sha1
+precision: null

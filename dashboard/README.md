@@ -57,6 +57,7 @@ npm run dev
 - **远程**：类型分布、用量柱状图、`config/dump`（敏感字段打码）+ `operations/about`
 - **任务**：状态饼图、耗时对比、`job/list` / `job/status`，可停止运行中的任务
 - **挂载**：`mount/listmounts` + VFS 缓存饼图
+- **账号轮换**：`rotation/status`，每个用了 `oauth_account_files` 的远程当前用哪个账号、哪些在冷却、剩多久、切换过几次和原因
 - **主机**：本机默认条目 + 后续多机器的 RC 地址
 
 ## UI

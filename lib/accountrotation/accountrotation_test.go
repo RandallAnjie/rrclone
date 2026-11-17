@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/rclone/rclone/fs/config/configmap"
+	"github.com/rclone/rclone/fs/rc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -311,4 +312,43 @@ func TestWriteFile(t *testing.T) {
 	assert.Contains(t, v, `"access_token":"b"`)
 
 	assert.Error(t, WriteFile(file, "", "", "not json"))
+}
+
+func TestStatus(t *testing.T) {
+	srv, _ := newTestServer(t, "acct-a")
+	r := NewRotator("status-test", NewPool([]string{"acct-a", "acct-b", "acct-c"}), time.Minute, "acct-a", clientFor("acct-a"), rateLimited,
+		func(ctx context.Context, file string) (*http.Client, error) { return clientFor(file), nil })
+	st := r.Status()
+	assert.Equal(t, "acct-a", st.Current)
+	assert.Zero(t, st.Switches)
+	assert.Nil(t, st.LastSwitch)
+
+	resp, err := (&http.Client{Transport: r}).Get(srv.URL)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	st = r.Status()
+	assert.Equal(t, "acct-b", st.Current)
+	assert.Equal(t, int64(1), st.Switches)
+	assert.Equal(t, "rate limited", st.LastReason)
+	require.NotNil(t, st.LastSwitch)
+	require.Len(t, st.Accounts, 3)
+	assert.True(t, st.Accounts[0].CoolingDown, "failed account rests")
+	assert.InDelta(t, 60, st.Accounts[0].CooldownLeft, 2)
+	assert.True(t, st.Accounts[1].Active)
+	assert.False(t, st.Accounts[2].CoolingDown)
+
+	// Reported through the rc
+	call := rc.Calls.Get("rotation/status")
+	require.NotNil(t, call)
+	out, err := call.Fn(context.Background(), rc.Params{})
+	require.NoError(t, err)
+	var found bool
+	for _, s := range out["rotators"].([]Status) {
+		if s.Name == "status-test" {
+			found = true
+			assert.Equal(t, "acct-b", s.Current)
+		}
+	}
+	assert.True(t, found)
 }

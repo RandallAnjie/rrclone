@@ -162,3 +162,25 @@ export type OverviewSnapshot = {
   mounts: MountList;
   bwlimit?: CoreBwLimit;
 };
+
+export type RotationAccount = {
+  file: string;
+  active?: boolean;
+  cooling_down?: boolean;
+  cooldown_left?: number;
+  cooldown_until?: string;
+};
+
+export type RotationStatus = {
+  name: string;
+  current?: string;
+  cooldown?: number;
+  switches?: number;
+  last_switch?: string;
+  last_reason?: string;
+  accounts?: RotationAccount[];
+};
+
+export type RotationList = {
+  rotators?: RotationStatus[];
+};

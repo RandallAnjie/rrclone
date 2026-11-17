@@ -174,9 +174,15 @@ account's own app:
 }
 ```
 
-To make one, run `rclone authorize dropbox APP_KEY APP_SECRET` and
-put the token it prints under `token`. Leave the expiry out, or set it
-to the zero time, to force a refresh on first use.
+To make one, authorise the app in the browser and let rclone write the
+file:
+
+```console
+rclone authorize dropbox APP_KEY APP_SECRET --account-file ~/.config/rrclone/dropbox-accounts/app1.json
+```
+
+Run it again with the same file to renew an account whose token
+stopped working.
 
 ```ini
 [dropbox]

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -284,4 +285,30 @@ func TestRotatorServerCooldownWins(t *testing.T) {
 	require.NoError(t, err)
 	_ = resp.Body.Close()
 	assert.True(t, r.pool.coolingDown("a", time.Now().Add(30*time.Minute)))
+}
+
+func TestWriteFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "sub", "acct.json")
+	require.NoError(t, WriteFile(file, "id1", "sec1", ` {"access_token":"a","refresh_token":"r"} `))
+	clientID, clientSecret, tok, structured, err := ReadFile(file)
+	require.NoError(t, err)
+	assert.True(t, structured)
+	assert.Equal(t, "id1", clientID)
+	assert.Equal(t, "sec1", clientSecret)
+	assert.JSONEq(t, `{"access_token":"a","refresh_token":"r"}`, tok)
+	info, err := os.Stat(file)
+	require.NoError(t, err)
+	if runtime.GOOS != "windows" {
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
+
+	// Renewing replaces it; blank credentials use the remote's app
+	require.NoError(t, WriteFile(file, "", "", `{"access_token":"b"}`))
+	m := &TokenFileMapper{Base: configmap.Simple{"client_id": "base"}, File: file}
+	v, _ := m.Get("client_id")
+	assert.Equal(t, "base", v)
+	v, _ = m.Get("token")
+	assert.Contains(t, v, `"access_token":"b"`)
+
+	assert.Error(t, WriteFile(file, "", "", "not json"))
 }

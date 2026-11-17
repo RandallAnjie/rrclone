@@ -40,7 +40,7 @@ Rclone *("rsync for cloud storage")* 是一个用于在各种云存储之间同�
 - **rclone 状态看板**：独立的 `dashboard/` Next.js 应用
 - **一键安装**、默认配置 `~/.config/rrclone/rrclone.conf`
 
-Google Drive / Dropbox 多账号轮换的细节分别在 Drive、Dropbox 文档的 **“OAuth account rotation”** 章节。看板启动方式见 [dashboard/README.md](dashboard/README.md)。
+账号文件可以用 `rclone authorize <后端> <client_id> <client_secret> --account-file 文件.json` 直接生成。Google Drive / Dropbox 多账号轮换的细节分别在 Drive、Dropbox 文档的 **“OAuth account rotation”** 章节。看板启动方式见 [dashboard/README.md](dashboard/README.md)。
 
 ### 维护：CI 与上游同步
 

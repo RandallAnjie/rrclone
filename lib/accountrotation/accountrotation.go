@@ -128,6 +128,31 @@ func ReadFile(path string) (clientID, clientSecret, tokenJSON string, structured
 	return "", "", strings.TrimSpace(string(data)), false, nil
 }
 
+// WriteFile writes an account file in the structured format, holding
+// tokenJSON (as rclone stores under "token") and the OAuth app it was
+// made with. clientID and clientSecret may be blank to use the
+// remote's own app. An existing file is replaced.
+func WriteFile(path, clientID, clientSecret, tokenJSON string) error {
+	tokenJSON = strings.TrimSpace(tokenJSON)
+	if !json.Valid([]byte(tokenJSON)) {
+		return fmt.Errorf("token is not JSON: %q", tokenJSON)
+	}
+	data, err := json.MarshalIndent(fileData{
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		Token:        json.RawMessage(tokenJSON),
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	if dir := filepath.Dir(path); dir != "" {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o600)
+}
+
 // normalizeTokenExpiry replaces a missing or zero "expiry" with a time
 // in the past so the oauth2 library refreshes the token straight away
 // rather than trusting a possibly stale access_token forever.

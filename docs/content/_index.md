@@ -191,6 +191,7 @@ WebDAV or S3, that work out of the box.)
 {{< provider name="Nextcloud" home="https://nextcloud.com/" config="/webdav/#nextcloud" >}}
 {{< provider name="Blomp Cloud Storage" home="https://rclone.org/swift/" config="/swift/" >}}
 {{< provider name="OpenDrive" home="https://www.opendrive.com/" config="/opendrive/" >}}
+{{< provider name="OpenList / AList" home="https://oplist.org/" config="/openlist/" >}}
 {{< provider name="OpenStack Swift" home="https://docs.openstack.org/swift/latest/" config="/swift/" >}}
 {{< provider name="Oracle Cloud Storage Swift" home="https://docs.oracle.com/en-us/iaas/integration/doc/configure-object-storage.html" config="/swift/" >}}
 {{< provider name="Oracle Object Storage" home="https://www.oracle.com/cloud/storage/object-storage" config="/oracleobjectstorage/" >}}

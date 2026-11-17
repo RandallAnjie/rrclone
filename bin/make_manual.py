@@ -79,6 +79,7 @@ docs = [
     "azurefiles.md",
     "onedrive.md",
     "opendrive.md",
+    "openlist.md",
     "oracleobjectstorage/_index.md",
     "qingstor.md",
     "quatrix.md",

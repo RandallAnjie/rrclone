@@ -83,6 +83,7 @@ See the following for detailed instructions for
 - [Microsoft OneDrive](/onedrive/)
 - [OpenStack Swift / Rackspace Cloudfiles / Blomp Cloud Storage / Memset Memstore](/swift/)
 - [OpenDrive](/opendrive/)
+- [OpenList / AList](/openlist/)
 - [Oracle Object Storage](/oracleobjectstorage/)
 - [Pcloud](/pcloud/)
 - [PikPak](/pikpak/)

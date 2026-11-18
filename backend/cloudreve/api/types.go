@@ -12,22 +12,30 @@ import (
 // Response codes returned in Response.Code
 const (
 	CodeOK                   = 0
-	CodeNotFullySuccess      = 203 // partial success, or 2FA required at login
+	CodeNotFullySuccess      = 203 // 2FA required at login
 	CodeCheckLogin           = 401
 	CodeNoPermission         = 403
 	CodeNotFound             = 404
 	CodeConflict             = 409
 	CodeParamErr             = 40001
 	CodeObjectExist          = 40004
+	CodePolicyNotAllowed     = 40006
 	CodeUploadSessionExpired = 40011
-	CodeParentNotExist       = 40016
+	CodeParentNotExist       = 40016 // the usual code for a missing path
 	CodeCredentialInvalid    = 40020
 	Code2FACodeErr           = 40022
 	CodeCaptchaError         = 40026
 	CodeFileNotFound         = 40044
+	CodeFileTooLarge         = 40049
 	CodeInsufficientCapacity = 40051
+	CodeIllegalObjectName    = 40052
 	CodeLockConflict         = 40073
+	CodeBatchIncomplete      = 40081 // details in Response.AggregatedError
+	CodeDBError              = 50001
 )
+
+// MetaUploadSessionID is the metadata key on a file being uploaded
+const MetaUploadSessionID = "sys:upload_session_id"
 
 // File types in File.Type
 const (
@@ -56,10 +64,30 @@ const CipherAES256CTR = "aes-256-ctr"
 //
 // The HTTP status is 200 even for errors, which are reported in Code.
 type Response struct {
-	Code  int             `json:"code"`
-	Data  json.RawMessage `json:"data,omitempty"`
-	Msg   string          `json:"msg"`
-	Error string          `json:"error,omitempty"`
+	Code            int                 `json:"code"`
+	Data            json.RawMessage     `json:"data,omitempty"`
+	AggregatedError map[string]Response `json:"aggregated_error,omitempty"`
+	Msg             string              `json:"msg"`
+	Error           string              `json:"error,omitempty"`
+}
+
+// Err returns the error r reports, or nil.
+//
+// A failed batch operation has its reasons per item in
+// AggregatedError. rclone sends one item at a time, so the reason of
+// that item is the error.
+func (r *Response) Err() error {
+	if r.Code == CodeOK {
+		return nil
+	}
+	if r.Code == CodeBatchIncomplete {
+		for _, item := range r.AggregatedError {
+			if item.Code != CodeOK {
+				return &Error{Code: item.Code, Msg: item.Msg}
+			}
+		}
+	}
+	return &Error{Code: r.Code, Msg: r.Msg}
 }
 
 // Error is returned for a response with a non zero Code
@@ -145,10 +173,11 @@ type Pagination struct {
 
 // ListResponse is the data of GET /file
 type ListResponse struct {
-	Files         []File         `json:"files"`
-	Parent        File           `json:"parent"`
-	Pagination    *Pagination    `json:"pagination"`
-	StoragePolicy *StoragePolicy `json:"storage_policy,omitempty"`
+	Files          []File         `json:"files"`
+	Parent         File           `json:"parent"`
+	Pagination     *Pagination    `json:"pagination"`
+	SingleFileView bool           `json:"single_file_view,omitempty"` // the URI was a file
+	StoragePolicy  *StoragePolicy `json:"storage_policy,omitempty"`
 }
 
 // CreateFileRequest is the body of POST /file/create
@@ -156,6 +185,18 @@ type CreateFileRequest struct {
 	URI           string `json:"uri"`
 	Type          string `json:"type"` // "file" or "folder"
 	ErrOnConflict bool   `json:"err_on_conflict"`
+}
+
+// MetadataPatch sets one metadata key
+type MetadataPatch struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// PatchMetadataRequest is the body of PATCH /file/metadata
+type PatchMetadataRequest struct {
+	URIs    []string        `json:"uris"`
+	Patches []MetadataPatch `json:"patches"`
 }
 
 // RenameRequest is the body of POST /file/rename
@@ -232,6 +273,7 @@ type UploadSession struct {
 	StoragePolicy   *StoragePolicy   `json:"storage_policy,omitempty"`
 	URI             string           `json:"uri"`
 	CallbackSecret  string           `json:"callback_secret"`
+	MimeType        string           `json:"mime_type,omitempty"`
 	UploadPolicy    string           `json:"upload_policy,omitempty"`
 	EncryptMetadata *EncryptMetadata `json:"encrypt_metadata,omitempty"`
 }
@@ -249,17 +291,10 @@ type ShareCreateRequest struct {
 	Expire    int    `json:"expire,omitempty"` // seconds
 }
 
-// CompleteMultipartUpload is the XML body completing an S3 style
-// multipart upload
-type CompleteMultipartUpload struct {
-	XMLName struct{}        `xml:"CompleteMultipartUpload"`
-	Parts   []CompletedPart `xml:"Part"`
-}
-
-// CompletedPart is one part of CompleteMultipartUpload
+// CompletedPart is one uploaded part of an S3 style multipart upload
 type CompletedPart struct {
-	PartNumber int    `xml:"PartNumber"`
-	ETag       string `xml:"ETag"`
+	PartNumber int
+	ETag       string
 }
 
 // QiniuPart is one part of a Qiniu multipart completion
@@ -270,5 +305,11 @@ type QiniuPart struct {
 
 // QiniuComplete is the body completing a Qiniu multipart upload
 type QiniuComplete struct {
-	Parts []QiniuPart `json:"parts"`
+	MimeType string      `json:"mimeType,omitempty"`
+	Parts    []QiniuPart `json:"parts"`
+}
+
+// OneDriveStatus is the state of a OneDrive upload session
+type OneDriveStatus struct {
+	NextExpectedRanges []string `json:"nextExpectedRanges"`
 }

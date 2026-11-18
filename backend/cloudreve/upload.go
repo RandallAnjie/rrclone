@@ -6,10 +6,10 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"path"
@@ -23,13 +23,25 @@ import (
 	"github.com/rclone/rclone/lib/rest"
 )
 
-// maxBufferedChunk is the largest chunk buffered in memory so it can
-// be retried. Bigger chunks (a relayed upload sends the whole file as
-// one) are streamed without retries.
-const maxBufferedChunk = 256 * 1024 * 1024
+const (
+	// maxBufferedChunk is the largest chunk buffered in memory so it can
+	// be retried. Bigger chunks (a relayed upload sends the whole file as
+	// one) are streamed without retries.
+	maxBufferedChunk = 256 * 1024 * 1024
 
-// errUnsupportedPolicy is returned by uploadToPolicy for storage
-// policies rclone can't upload to directly
+	// octetStream is the Content-Type the official client sends with
+	// data, which some providers sign into their upload URLs
+	octetStream = "application/octet-stream"
+)
+
+// Waiting for Upyun, which tells Cloudreve about an upload asynchronously
+var (
+	upyunPollInterval = 500 * time.Millisecond
+	upyunPollTimeout  = time.Minute
+)
+
+// errUnsupportedPolicy is returned by uploadToPolicy for uploads rclone
+// can't send to the storage provider itself
 var errUnsupportedPolicy = errors.New("unsupported storage policy")
 
 // upload uploads in as remote, replacing the existing file if
@@ -42,51 +54,26 @@ func (f *Fs) upload(ctx context.Context, in io.Reader, remote string, size int64
 	if err != nil {
 		return nil, err
 	}
-	if size == 0 {
-		return f.uploadEmpty(ctx, s, remote, overwrite)
-	}
-	err = f.uploadToPolicy(ctx, s, in, size)
-	if errors.Is(err, errUnsupportedPolicy) {
+	err = f.uploadToPolicy(ctx, s, remote, in, size)
+	if errors.Is(err, errUnsupportedPolicy) || (err != nil && size == 0) {
 		// The server can store small files for us whatever the policy
 		f.cancelSession(ctx, s)
-		fs.Debugf(f, "%s: uploading through Cloudreve as storage policy %q isn't supported", remote, s.StoragePolicy.Type)
-		file, cErr := f.uploadContent(ctx, remote, in, size, true)
+		fs.Debugf(f, "%s: uploading through Cloudreve to storage policy %q: %v", remote, s.StoragePolicy.Type, err)
+		file, cErr := f.uploadContent(ctx, remote, in, size, overwrite)
 		if cErr != nil {
 			return nil, fmt.Errorf("cloudreve: storage policy type %q needs relayed uploads (enable relay on the policy) and uploading through Cloudreve failed: %w", s.StoragePolicy.Type, cErr)
 		}
-		return file, nil
+		if err := f.patchModTime(ctx, f.uri(remote), file.PrimaryEntity, modTime); err != nil {
+			fs.Debugf(f, "%s: couldn't set modification time: %v", remote, err)
+			return file, nil
+		}
+		return f.getInfo(ctx, remote)
 	}
 	if err != nil {
 		f.cancelSession(ctx, s)
 		return nil, err
 	}
 	return f.getInfo(ctx, remote)
-}
-
-// uploadEmpty finishes upload session s for an empty file.
-//
-// A relayed upload takes a single empty chunk, which keeps the
-// modification time. Other policies have nothing to send a part to,
-// so the file is created through Cloudreve with the time set to now.
-func (f *Fs) uploadEmpty(ctx context.Context, s *api.UploadSession, remote string, overwrite bool) (*api.File, error) {
-	if s.StoragePolicy.Relay || s.StoragePolicy.Type == api.PolicyLocal {
-		var zero int64
-		opts := rest.Opts{
-			Method:        "POST",
-			Path:          fmt.Sprintf("/file/upload/%s/0", s.SessionID),
-			ContentLength: &zero,
-			ContentType:   "application/octet-stream",
-		}
-		_, err := f.sendChunk(ctx, f.srv, &opts, bytes.NewReader(nil), nil, &api.Response{})
-		if err == nil {
-			if file, err := f.getInfo(ctx, remote); err == nil && !file.IsDir() {
-				return file, nil
-			}
-		}
-		fs.Debugf(f, "%s: empty upload session failed, creating the file instead: %v", remote, err)
-	}
-	f.cancelSession(ctx, s)
-	return f.uploadContent(ctx, remote, bytes.NewReader(nil), 0, overwrite)
 }
 
 // createSession starts an upload session for remote
@@ -118,6 +105,10 @@ func (f *Fs) createSession(ctx context.Context, remote string, size int64, modTi
 			}
 			err = f.call(ctx, f.srv, &opts, req, &s)
 		}
+	case api.CodeLockConflict:
+		if f.cancelStaleSession(ctx, remote) {
+			return f.createSession(ctx, remote, size, modTime, overwrite)
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -126,6 +117,28 @@ func (f *Fs) createSession(ctx context.Context, remote string, size int64, modTi
 		return nil, errors.New("cloudreve: upload session has no storage policy")
 	}
 	return &s, nil
+}
+
+// cancelStaleSession deletes the upload session holding remote, which
+// an interrupted upload left locked until the session expires. It
+// returns whether it deleted one.
+func (f *Fs) cancelStaleSession(ctx context.Context, remote string) bool {
+	file, err := f.getInfo(ctx, remote)
+	if err != nil {
+		return false
+	}
+	id := file.Metadata[api.MetaUploadSessionID]
+	if id == "" {
+		return false
+	}
+	fs.Infof(f, "%s: cancelling the unfinished upload session %s", remote, id)
+	opts := rest.Opts{Method: "DELETE", Path: "/file/upload"}
+	err = f.call(ctx, f.srv, &opts, &api.DeleteUploadSessionRequest{ID: id, URI: f.uri(remote)}, nil)
+	if err != nil {
+		fs.Debugf(f, "%s: failed to cancel upload session %s: %v", remote, id, err)
+		return false
+	}
+	return true
 }
 
 // cancelSession deletes a failed upload session, logging any error
@@ -157,7 +170,7 @@ func (f *Fs) uploadContent(ctx context.Context, remote string, in io.Reader, siz
 		Path:          "/file/content",
 		Parameters:    url.Values{"uri": {f.uri(remote)}},
 		ContentLength: &size,
-		ContentType:   "application/octet-stream",
+		ContentType:   octetStream,
 	}
 	var r api.Response
 	_, err := f.sendChunk(ctx, f.srv, &opts, in, nil, &r)
@@ -188,7 +201,8 @@ func encryptReader(in io.Reader, m *api.EncryptMetadata) (io.Reader, error) {
 type chunkFunc func(index int, offset, n int64, chunk io.Reader, rewind func() error) error
 
 // forEachChunk splits in into chunks of chunkSize (0 for one chunk)
-// and calls fn for each.
+// and calls fn for each. An empty file is one empty chunk, for which
+// Cloudreve hands out one part to upload.
 func forEachChunk(in io.Reader, size, chunkSize int64, fn chunkFunc) error {
 	if chunkSize <= 0 || chunkSize > size {
 		chunkSize = size
@@ -197,7 +211,7 @@ func forEachChunk(in io.Reader, size, chunkSize int64, fn chunkFunc) error {
 	if chunkSize <= maxBufferedChunk {
 		buf = make([]byte, chunkSize)
 	}
-	for index, offset := 0, int64(0); offset < size; index++ {
+	for index, offset := 0, int64(0); offset < size || index == 0; index++ {
 		n := min(chunkSize, size-offset)
 		var err error
 		if buf != nil {
@@ -232,8 +246,8 @@ func (f *Fs) sendChunk(ctx context.Context, srv *rest.Client, opts *rest.Opts, c
 		opts.Body = chunk
 		if out != nil {
 			resp, err = srv.CallJSON(ctx, opts, nil, out)
-			if r, ok := out.(*api.Response); ok && err == nil && r.Code != api.CodeOK {
-				err = &api.Error{Code: r.Code, Msg: r.Msg}
+			if r, ok := out.(*api.Response); ok && err == nil {
+				err = r.Err()
 			}
 		} else {
 			resp, err = srv.Call(ctx, opts)
@@ -253,14 +267,17 @@ func (f *Fs) sendChunk(ctx context.Context, srv *rest.Client, opts *rest.Opts, c
 }
 
 // uploadToPolicy sends the data for upload session s
-func (f *Fs) uploadToPolicy(ctx context.Context, s *api.UploadSession, in io.Reader, size int64) error {
+func (f *Fs) uploadToPolicy(ctx context.Context, s *api.UploadSession, remote string, in io.Reader, size int64) error {
+	policy := s.StoragePolicy
+	if !policy.Relay && policy.Type == api.PolicyOneDrive && size == 0 {
+		return errUnsupportedPolicy // OneDrive sessions can't take an empty file
+	}
 	if s.EncryptMetadata != nil {
 		var err error
 		if in, err = encryptReader(in, s.EncryptMetadata); err != nil {
 			return err
 		}
 	}
-	policy := s.StoragePolicy
 	if policy.Relay {
 		return f.uploadRelay(ctx, s, in, size)
 	}
@@ -275,6 +292,8 @@ func (f *Fs) uploadToPolicy(ctx context.Context, s *api.UploadSession, in io.Rea
 		return f.uploadMultipart(ctx, s, in, size)
 	case api.PolicyQiniu:
 		return f.uploadQiniu(ctx, s, in, size)
+	case api.PolicyUpyun:
+		return f.uploadUpyun(ctx, s, remote, in, size)
 	}
 	return errUnsupportedPolicy
 }
@@ -286,7 +305,7 @@ func (f *Fs) uploadRelay(ctx context.Context, s *api.UploadSession, in io.Reader
 			Method:        "POST",
 			Path:          fmt.Sprintf("/file/upload/%s/%d", s.SessionID, index),
 			ContentLength: &n,
-			ContentType:   "application/octet-stream",
+			ContentType:   octetStream,
 		}
 		_, err := f.sendChunk(ctx, f.srv, &opts, chunk, rewind, &api.Response{})
 		return err
@@ -307,7 +326,7 @@ func (f *Fs) uploadRemote(ctx context.Context, s *api.UploadSession, in io.Reade
 			Method:        "POST",
 			RootURL:       u,
 			ContentLength: &n,
-			ContentType:   "application/octet-stream",
+			ContentType:   octetStream,
 			ExtraHeaders:  map[string]string{"Authorization": s.Credential},
 		}
 		_, err = f.sendChunk(ctx, f.plain, &opts, chunk, rewind, &api.Response{})
@@ -315,19 +334,63 @@ func (f *Fs) uploadRemote(ctx context.Context, s *api.UploadSession, in io.Reade
 	})
 }
 
+// putOneDriveRange sends n bytes at offset to a OneDrive upload session
+func (f *Fs) putOneDriveRange(ctx context.Context, sessionURL string, offset, n, size int64, chunk io.Reader, rewind func() error) (*http.Response, error) {
+	opts := rest.Opts{
+		Method:        "PUT",
+		RootURL:       sessionURL,
+		ContentLength: &n,
+		ContentType:   octetStream,
+		ExtraHeaders:  map[string]string{"Content-Range": fmt.Sprintf("bytes %d-%d/%d", offset, offset+n-1, size)},
+	}
+	return f.sendChunk(ctx, f.plain, &opts, chunk, rewind, nil)
+}
+
+// oneDriveNextOffset asks a OneDrive upload session what it needs next
+func (f *Fs) oneDriveNextOffset(ctx context.Context, sessionURL string) (int64, error) {
+	opts := rest.Opts{Method: "GET", RootURL: sessionURL}
+	var status api.OneDriveStatus
+	err := f.pacer.Call(func() (bool, error) {
+		resp, err := f.plain.CallJSON(ctx, &opts, nil, &status)
+		return f.shouldRetry(ctx, resp, err)
+	})
+	if err != nil {
+		return 0, err
+	}
+	if len(status.NextExpectedRanges) == 0 {
+		return 0, errors.New("OneDrive session expects no more data")
+	}
+	start, _, _ := strings.Cut(status.NextExpectedRanges[0], "-")
+	return strconv.ParseInt(start, 10, 64)
+}
+
 // uploadOneDrive sends the chunks to a OneDrive upload session
 func (f *Fs) uploadOneDrive(ctx context.Context, s *api.UploadSession, in io.Reader, size int64) error {
 	if len(s.UploadURLs) == 0 {
 		return errors.New("no OneDrive upload URL")
 	}
+	sessionURL := s.UploadURLs[0]
 	err := forEachChunk(in, size, s.ChunkSize, func(index int, offset, n int64, chunk io.Reader, rewind func() error) error {
-		opts := rest.Opts{
-			Method:        "PUT",
-			RootURL:       s.UploadURLs[0],
-			ContentLength: &n,
-			ExtraHeaders:  map[string]string{"Content-Range": fmt.Sprintf("bytes %d-%d/%d", offset, offset+n-1, size)},
+		resp, err := f.putOneDriveRange(ctx, sessionURL, offset, n, size, chunk, rewind)
+		if err == nil || resp == nil || resp.StatusCode != http.StatusRequestedRangeNotSatisfiable || rewind == nil {
+			return err
 		}
-		_, err := f.sendChunk(ctx, f.plain, &opts, chunk, rewind, nil)
+		// OneDrive already has some of this chunk from an attempt whose
+		// reply was lost, so send only what it is missing.
+		next, nextErr := f.oneDriveNextOffset(ctx, sessionURL)
+		if nextErr != nil || next < offset {
+			return err
+		}
+		if next >= offset+n {
+			return nil
+		}
+		if err := rewind(); err != nil {
+			return err
+		}
+		if _, err := io.CopyN(io.Discard, chunk, next-offset); err != nil {
+			return err
+		}
+		_, err = f.putOneDriveRange(ctx, sessionURL, next, offset+n-next, size, chunk, nil)
 		return err
 	})
 	if err != nil {
@@ -342,22 +405,25 @@ func (f *Fs) callback(ctx context.Context, method, policyType string, s *api.Upl
 		Method: method,
 		Path:   fmt.Sprintf("/callback/%s/%s/%s", policyType, s.SessionID, s.CallbackSecret),
 	}
-	if method == "POST" {
-		return f.call(ctx, f.srv, &opts, struct{}{}, nil)
-	}
 	return f.call(ctx, f.srv, &opts, nil, nil)
+}
+
+// partsXML is the body completing an S3 style multipart upload. ETags
+// keep their quotes unescaped, as in the official client.
+func partsXML(parts []api.CompletedPart) string {
+	var b strings.Builder
+	b.WriteString("<CompleteMultipartUpload>")
+	for _, part := range parts {
+		fmt.Fprintf(&b, "<Part><PartNumber>%d</PartNumber><ETag>%s</ETag></Part>", part.PartNumber, part.ETag)
+	}
+	b.WriteString("</CompleteMultipartUpload>")
+	return b.String()
 }
 
 // uploadMultipart sends the chunks to presigned S3 style multipart
 // upload URLs (S3, KS3, OSS, COS, OBS) and completes the upload.
 func (f *Fs) uploadMultipart(ctx context.Context, s *api.UploadSession, in io.Reader, size int64) error {
 	policyType := s.StoragePolicy.Type
-	// COS, OBS and OSS sign the Content-Type into the URLs
-	partContentType := ""
-	switch policyType {
-	case api.PolicyKS3, api.PolicyCOS, api.PolicyOBS, api.PolicyOSS:
-		partContentType = "application/octet-stream"
-	}
 	var parts []api.CompletedPart
 	err := forEachChunk(in, size, s.ChunkSize, func(index int, offset, n int64, chunk io.Reader, rewind func() error) error {
 		if index >= len(s.UploadURLs) {
@@ -367,7 +433,7 @@ func (f *Fs) uploadMultipart(ctx context.Context, s *api.UploadSession, in io.Re
 			Method:        "PUT",
 			RootURL:       s.UploadURLs[index],
 			ContentLength: &n,
-			ContentType:   partContentType,
+			ContentType:   octetStream,
 		}
 		resp, err := f.sendChunk(ctx, f.plain, &opts, chunk, rewind, nil)
 		if err != nil {
@@ -387,39 +453,33 @@ func (f *Fs) uploadMultipart(ctx context.Context, s *api.UploadSession, in io.Re
 		return errors.New("no URL to complete the multipart upload")
 	}
 
-	opts := rest.Opts{Method: "POST", RootURL: s.CompleteURL, ExtraHeaders: map[string]string{}}
-	var body []byte
+	opts := rest.Opts{Method: "POST", RootURL: s.CompleteURL, ContentType: octetStream, ExtraHeaders: map[string]string{}}
+	body := ""
 	switch policyType {
 	case api.PolicyOSS:
-		// OSS lists the parts itself and calls Cloudreve back
-		opts.ContentType = "application/octet-stream"
+		// OSS lists the parts itself
 		opts.ExtraHeaders["x-oss-complete-all"] = "yes"
 		opts.ExtraHeaders["x-oss-forbid-overwrite"] = "true"
+	case api.PolicyCOS:
+		opts.ExtraHeaders["x-cos-forbid-overwrite"] = "true"
+		body = partsXML(parts)
 	default:
-		if body, err = xml.Marshal(api.CompleteMultipartUpload{Parts: parts}); err != nil {
-			return err
-		}
-		switch policyType {
-		case api.PolicyKS3, api.PolicyOBS:
-			opts.ContentType = "application/octet-stream"
-		default:
-			opts.ContentType = "application/xml"
-		}
-		if policyType == api.PolicyCOS {
-			opts.ExtraHeaders["x-cos-forbid-overwrite"] = "true"
-		}
+		body = partsXML(parts)
 	}
 	n := int64(len(body))
 	opts.ContentLength = &n
-	var resp *http.Response
 	var respBody []byte
 	err = f.pacer.Call(func() (bool, error) {
-		opts.Body = bytes.NewReader(body)
-		resp, err = f.plain.Call(ctx, &opts)
+		opts.Body = strings.NewReader(body)
+		resp, err := f.plain.Call(ctx, &opts)
 		if err == nil {
 			respBody, err = rest.ReadBody(resp)
 		}
-		// S3 can report a failed completion with status 200
+		// S3 can report a failed completion with status 200, and OSS a
+		// failed callback to Cloudreve with status 203
+		if err == nil && resp.StatusCode != http.StatusOK {
+			return false, fmt.Errorf("completing multipart upload failed: HTTP %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+		}
 		if err == nil && bytes.Contains(respBody, []byte("<Error>")) {
 			err = fmt.Errorf("completing multipart upload failed: %s", strings.TrimSpace(string(respBody)))
 		}
@@ -447,10 +507,7 @@ func checkCallbackReply(body []byte) error {
 	if err := json.Unmarshal(body, &r); err != nil {
 		return nil // not a Cloudreve reply
 	}
-	if r.Code != api.CodeOK {
-		return &api.Error{Code: r.Code, Msg: r.Msg}
-	}
-	return nil
+	return r.Err()
 }
 
 // uploadQiniu sends the chunks with Qiniu's multipart upload v2 API
@@ -466,7 +523,7 @@ func (f *Fs) uploadQiniu(ctx context.Context, s *api.UploadSession, in io.Reader
 			Method:        "PUT",
 			RootURL:       fmt.Sprintf("%s/%d", base, index+1),
 			ContentLength: &n,
-			ContentType:   "application/octet-stream",
+			ContentType:   octetStream,
 			ExtraHeaders:  auth,
 		}
 		var r struct {
@@ -487,7 +544,7 @@ func (f *Fs) uploadQiniu(ctx context.Context, s *api.UploadSession, in io.Reader
 	opts := rest.Opts{Method: "POST", RootURL: base, ExtraHeaders: auth}
 	var reply map[string]any
 	err = f.pacer.Call(func() (bool, error) {
-		resp, err := f.plain.CallJSON(ctx, &opts, &api.QiniuComplete{Parts: parts}, &reply)
+		resp, err := f.plain.CallJSON(ctx, &opts, &api.QiniuComplete{MimeType: s.MimeType, Parts: parts}, &reply)
 		return f.shouldRetry(ctx, resp, err)
 	})
 	if err != nil {
@@ -499,6 +556,56 @@ func (f *Fs) uploadQiniu(ctx context.Context, s *api.UploadSession, in io.Reader
 		return &api.Error{Code: int(code), Msg: msg}
 	}
 	return nil
+}
+
+// uploadUpyun sends the file in one form upload, then waits for Upyun
+// to tell Cloudreve about it.
+func (f *Fs) uploadUpyun(ctx context.Context, s *api.UploadSession, remote string, in io.Reader, size int64) error {
+	if len(s.UploadURLs) == 0 {
+		return errors.New("no Upyun upload URL")
+	}
+	var form bytes.Buffer
+	w := multipart.NewWriter(&form)
+	_ = w.WriteField("policy", s.UploadPolicy)
+	_ = w.WriteField("authorization", s.Credential)
+	if s.MimeType != "" {
+		_ = w.WriteField("content-type", s.MimeType)
+	}
+	// The file must be the last field of the form
+	if _, err := w.CreateFormFile("file", path.Base(remote)); err != nil {
+		return err
+	}
+	headLen := form.Len()
+	if err := w.Close(); err != nil {
+		return err
+	}
+	head, tail := form.Bytes()[:headLen], form.Bytes()[headLen:]
+	length := int64(len(head)) + size + int64(len(tail))
+	opts := rest.Opts{
+		Method:        "POST",
+		RootURL:       s.UploadURLs[0],
+		ContentLength: &length,
+		ContentType:   w.FormDataContentType(),
+	}
+	body := io.MultiReader(bytes.NewReader(head), io.LimitReader(in, size), bytes.NewReader(tail))
+	if _, err := f.sendChunk(ctx, f.plain, &opts, body, nil, nil); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(upyunPollTimeout)
+	for {
+		file, err := f.getInfo(ctx, remote)
+		if err == nil && file.Metadata[api.MetaUploadSessionID] != s.SessionID {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("timed out waiting for Upyun to confirm the upload")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(upyunPollInterval):
+		}
+	}
 }
 
 // withQuery returns raw with key=value appended to its query, leaving

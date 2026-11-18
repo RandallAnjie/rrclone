@@ -20,7 +20,7 @@ You need the URL of the site, and one of:
 - **An OAuth app.** This also works for accounts which sign in with
   OIDC / single sign-on (Pro), or sites with a login captcha. An
   administrator creates the app under Dashboard → OAuth Apps:
-  - Redirect URI: `http://127.0.0.1:53682/`
+  - Redirect URI: `http://localhost:53682/`
   - Scopes: `openid`, `offline_access`, `UserInfo.Read`,
     `Files.Read`, `Files.Write`, `Shares.Write`
 
@@ -69,7 +69,11 @@ only, and needs no login unless the share requires one.
 
 In Cloudreve Pro a user group can have several storage policies. Set
 `policy_id` to upload to a particular one. Otherwise uploads use the
-policy of the target folder.
+policy of the target folder, which this command shows:
+
+```console
+rclone backend policy remote:path/to/folder
+```
 
 ## Uploads
 
@@ -83,10 +87,16 @@ rclone uploads the way the storage policy says:
 | S3, KS3, COS | Presigned multipart upload, then tells Cloudreve |
 | OSS, OBS | Presigned multipart upload; the provider tells Cloudreve |
 | Qiniu | Qiniu multipart upload v2; Qiniu tells Cloudreve |
-| Upyun and others | Through the Cloudreve server in one request, which the server limits in size; enable relay for big files |
+| Upyun | Form upload straight to Upyun, which tells Cloudreve |
+| Others | Through the Cloudreve server in one request, which the server limits in size; enable relay for big files |
 
 Chunks are buffered in memory, so a failed chunk is retried. A relayed
-upload with no chunk size is sent in one request.
+upload with no chunk size is sent in one request, as is an upload to
+Upyun, and these can't be retried part way through.
+
+If an upload is interrupted, Cloudreve keeps the file locked until the
+upload session expires. rclone cancels such a session when it next
+uploads that file.
 
 Uploading over an existing file stores the new data as a new version.
 Cloudreve keeps or prunes old versions by its own settings.
@@ -99,14 +109,23 @@ rclone does this, so files are stored encrypted and Cloudreve decrypts
 them on download. Set `client_encryption = false` to upload unencrypted
 instead. Relayed uploads are encrypted by the server.
 
+### Modification times
+
+Cloudreve stores the modification time given at upload, but resets it
+when a file is moved, renamed or copied and has no API to set it. So
+in those cases, and when rclone is asked to change the time of a file,
+rclone records the time in the metadata of the file, as the WebDAV
+property `mtime` in the namespace `https://rclone.org/`.
+
+Only rclone reads this record, so other clients show the time of the
+last move. The record belongs to one version of the content and stops
+applying when any client uploads a new version.
+
 ## Limitations
 
 - Cloudreve exposes no file hashes, so checks use size and modification
   time.
-- The modification time is set at upload, with one second precision.
-  It can't be changed afterwards, so changing it means re-uploading.
-- Empty files uploaded straight to object storage (no relay) get the
-  current time, as Cloudreve has nothing to upload them to.
+- Modification times have one second precision.
 - Server-side copy only works between different folders. Within one
   folder rclone downloads and uploads.
 - Files go to the trash when deleted, unless `hard_delete` is set.

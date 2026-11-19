@@ -57,6 +57,7 @@ func init() {
 		Description: "Cloudreve v4",
 		NewFs:       NewFs,
 		Config:      configure,
+		CommandHelp: commandHelp,
 		Options: append(oauthutil.SharedOptions, []fs.Option{{
 			Name:     "url",
 			Help:     "URL of the Cloudreve site, e.g. https://cloud.example.com",
@@ -89,7 +90,8 @@ requires one.`,
 			Help: `ID of the storage policy to upload to.
 
 Leave blank to use the policy of the target folder. Choosing a policy
-needs Cloudreve Pro, where a user group may have several.`,
+needs Cloudreve Pro, where a user group may have several. "rclone
+backend policy remote:" shows the policy a folder uses.`,
 			Advanced: true,
 		}, {
 			Name: "client_encryption",
@@ -110,9 +112,14 @@ AES-256-CTR. Turn this off to upload such files unencrypted.`,
 			Help:     config.ConfigEncodingHelp,
 			Advanced: true,
 			// Cloudreve rejects \ / : * ? " < > | and names of . or ..
+			// Local storage paths are built from the names, so a server
+			// on Windows can't store control characters or folders
+			// ending in a space.
 			Default: encoder.Base |
 				encoder.EncodeWin |
 				encoder.EncodeBackSlash |
+				encoder.EncodeCtl |
+				encoder.EncodeRightSpace |
 				encoder.EncodeInvalidUtf8,
 		}}...),
 	})
@@ -151,6 +158,7 @@ type Object struct {
 	fs      *Fs
 	remote  string
 	id      string
+	entity  string // the content version
 	size    int64
 	modTime time.Time
 }
@@ -211,7 +219,7 @@ func errorHandler(resp *http.Response) error {
 	body, _ := rest.ReadBody(resp)
 	var r api.Response
 	if json.Unmarshal(body, &r) == nil && r.Code != 0 {
-		return &api.Error{Code: r.Code, Msg: r.Msg}
+		return r.Err()
 	}
 	return fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
 }
@@ -239,22 +247,33 @@ func (f *Fs) shouldRetry(ctx context.Context, resp *http.Response, err error) (b
 // be nil) and returning an *api.Error for a non zero code.
 func (f *Fs) call(ctx context.Context, srv *rest.Client, opts *rest.Opts, in any, out any) error {
 	var r api.Response
+	authed := srv == f.srv && f.ts != nil
 	err := f.pacer.Call(func() (bool, error) {
 		r = api.Response{}
-		resp, err := srv.CallJSON(ctx, opts, in, &r)
-		if err == nil && r.Code != api.CodeOK {
-			err = &api.Error{Code: r.Code, Msg: r.Msg}
+		var used string
+		if authed {
+			used = f.ts.accessToken()
 		}
-		// A revoked or early expired access token: refresh and
-		// retry. Only for the authorised client, since the token
-		// source itself calls the unauthorised one with its lock held.
-		if apiCode(err) == api.CodeCheckLogin && srv == f.srv && f.ts != nil && f.ts.invalidate() {
+		resp, err := srv.CallJSON(ctx, opts, in, &r)
+		if err == nil {
+			err = r.Err()
+		}
+		switch apiCode(err) {
+		case api.CodeCheckLogin:
+			// A revoked or early expired access token: refresh and
+			// retry. Only for the authorised client, since the token
+			// source itself calls the unauthorised one with its lock held.
+			if authed && f.ts.invalidate(used) {
+				return true, err
+			}
+		case api.CodeLockConflict, api.CodeDBError:
+			// Another operation holds the file, or a busy database
 			return true, err
 		}
 		return f.shouldRetry(ctx, resp, err)
 	})
 	if err != nil {
-		return err
+		return classifyError(err)
 	}
 	if out != nil && len(r.Data) > 0 && string(r.Data) != "null" {
 		if err := json.Unmarshal(r.Data, out); err != nil {
@@ -262,6 +281,17 @@ func (f *Fs) call(ctx context.Context, srv *rest.Client, opts *rest.Opts, in any
 		}
 	}
 	return nil
+}
+
+// classifyError marks errors which retrying can't fix
+func classifyError(err error) error {
+	switch apiCode(err) {
+	case api.CodeInsufficientCapacity:
+		return fserrors.FatalError(err)
+	case api.CodeFileTooLarge, api.CodeIllegalObjectName, api.CodePolicyNotAllowed:
+		return fserrors.NoRetryError(err)
+	}
+	return err
 }
 
 // apiCode returns the Cloudreve error code in err or 0
@@ -327,7 +357,8 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	// Log in unless we are browsing a share anonymously
 	tok, _ := oauthutil.GetToken(name, m)
 	if opt.ShareID == "" || tok != nil || opt.Email != "" {
-		f.ts = &tokenSource{f: f, ctx: ctx, token: tok}
+		// Tokens outlive the context which made the Fs
+		f.ts = &tokenSource{f: f, ctx: context.WithoutCancel(ctx), token: tok}
 		if tok == nil {
 			if opt.Email == "" || opt.Password == "" {
 				return nil, fmt.Errorf("not logged in: run \"rclone config reconnect %s:\" or set email and password", name)
@@ -423,16 +454,30 @@ func (ts *tokenSource) Token() (*oauth2.Token, error) {
 	return nil, fserrors.FatalError(fmt.Errorf("couldn't refresh token (%w) - try \"rclone config reconnect %s:\"", err, ts.f.name))
 }
 
-// invalidate forgets the access token so the next request refreshes
-// it. It returns false if there is no way to get a new one.
-func (ts *tokenSource) invalidate() bool {
+// accessToken returns the current access token without refreshing it
+func (ts *tokenSource) accessToken() string {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.token == nil {
+		return ""
+	}
+	return ts.token.AccessToken
+}
+
+// invalidate forgets the access token used, which the server refused,
+// so the next request refreshes it. A token another request already
+// replaced is left alone. It returns false if there is no way to get
+// a new one.
+func (ts *tokenSource) invalidate(used string) bool {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	if ts.token == nil || (ts.token.RefreshToken == "" && ts.f.opt.Password == "") {
 		return false
 	}
-	if ts.token.Expiry.IsZero() || time.Until(ts.token.Expiry) > 0 {
-		ts.token.Expiry = time.Unix(1, 0)
+	if ts.token.AccessToken == used {
+		expired := *ts.token
+		expired.Expiry = time.Unix(1, 0)
+		ts.token = &expired
 	}
 	return true
 }
@@ -527,6 +572,10 @@ func oauthConfig(site string) *oauthutil.Config {
 	}
 }
 
+// state2FA prefixes the config state asking for a 2FA code, which
+// carries the session of the login in progress
+const state2FA = "2fa:"
+
 // configure logs in during rclone config
 func configure(ctx context.Context, name string, m configmap.Mapper, in fs.ConfigIn) (*fs.ConfigOut, error) {
 	rawURL, _ := m.Get("url")
@@ -542,6 +591,13 @@ func configure(ctx context.Context, name string, m configmap.Mapper, in fs.Confi
 	}
 	f.newRestClients(ctx, nil)
 
+	if session, ok := strings.CutPrefix(in.State, state2FA); ok {
+		tok, err := verify2FA(ctx, f, session, in.Result)
+		if err != nil {
+			return nil, err
+		}
+		return nil, oauthutil.PutToken(name, m, tok, true)
+	}
 	switch in.State {
 	case "":
 		if shareID, _ := m.Get("share_id"); shareID != "" {
@@ -561,8 +617,7 @@ func configure(ctx context.Context, name string, m configmap.Mapper, in fs.Confi
 				return nil, err
 			}
 			if session != "" {
-				m.Set("config_2fa_session", session)
-				return fs.ConfigInput("2fa", "config_2fa", "Two-factor authentication code")
+				return fs.ConfigInput(state2FA+session, "config_2fa", "Two-factor authentication code")
 			}
 			return nil, oauthutil.PutToken(name, m, tok, true)
 		}
@@ -574,14 +629,6 @@ func configure(ctx context.Context, name string, m configmap.Mapper, in fs.Confi
 			OAuth2Config: oauthConfig(site),
 			NoOffline:    true,
 		})
-	case "2fa":
-		session, _ := m.Get("config_2fa_session")
-		m.Set("config_2fa_session", "")
-		tok, err := verify2FA(ctx, f, session, in.Result)
-		if err != nil {
-			return nil, err
-		}
-		return nil, oauthutil.PutToken(name, m, tok, true)
 	}
 	return nil, fmt.Errorf("unknown state %q", in.State)
 }
@@ -639,31 +686,51 @@ func (f *Fs) getInfo(ctx context.Context, remote string) (*api.File, error) {
 	return &file, nil
 }
 
+// isPlaceholder reports whether file is a new file still being
+// uploaded, which has no content yet. A file being replaced keeps its
+// old content until the upload finishes so isn't one.
+func isPlaceholder(file *api.File) bool {
+	return !file.IsDir() && file.Size == 0 && file.Metadata[api.MetaUploadSessionID] != ""
+}
+
 // listAll calls fn for every entry in dir, stopping early if fn returns true
 func (f *Fs) listAll(ctx context.Context, dir string, fn func(*api.File) bool) error {
 	params := url.Values{
 		"uri":       {f.uri(dir)},
 		"page_size": {strconv.Itoa(listPageSize)},
 	}
-	for page := 0; ; page++ {
+	seen := 0
+	for page := 1; ; page++ {
 		opts := rest.Opts{Method: "GET", Path: "/file", Parameters: params}
 		var r api.ListResponse
 		if err := f.call(ctx, f.srv, &opts, nil, &r); err != nil {
 			return err
 		}
+		if r.SingleFileView {
+			return fs.ErrorDirNotFound // dir is a file
+		}
 		for i := range r.Files {
+			if isPlaceholder(&r.Files[i]) {
+				continue
+			}
 			if fn(&r.Files[i]) {
 				return nil
 			}
 		}
+		seen += len(r.Files)
+		// Sites page by cursor by default, or optionally by number. The
+		// server may also use a smaller page than the one asked for.
 		p := r.Pagination
 		switch {
-		case p == nil || len(r.Files) == 0:
+		case p == nil:
 			return nil
 		case p.NextPageToken != "":
+			if p.NextPageToken == params.Get("next_page_token") {
+				return nil // no progress
+			}
 			params.Set("next_page_token", p.NextPageToken)
-		case !p.IsCursor && p.TotalItems > (page+1)*listPageSize:
-			params.Set("page", strconv.Itoa(page+1))
+		case !p.IsCursor && len(r.Files) > 0 && p.TotalItems > seen:
+			params.Set("page", strconv.Itoa(page))
 		default:
 			return nil
 		}
@@ -706,8 +773,9 @@ func (f *Fs) newObject(remote string, file *api.File) *Object {
 		fs:      f,
 		remote:  remote,
 		id:      file.ID,
+		entity:  file.PrimaryEntity,
 		size:    file.Size,
-		modTime: file.UpdatedAt,
+		modTime: fileModTime(file),
 	}
 }
 
@@ -722,6 +790,9 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 	}
 	if file.IsDir() {
 		return nil, fs.ErrorIsDir
+	}
+	if isPlaceholder(file) {
+		return nil, fs.ErrorObjectNotFound
 	}
 	return f.newObject(remote, file), nil
 }
@@ -845,13 +916,27 @@ func (f *Fs) relocate(ctx context.Context, srcFs *Fs, srcRemote, dstRemote strin
 		if srcLeaf == dstLeaf {
 			return nil
 		}
-		return f.rename(ctx, f.absURI(path.Join(dstParent, srcLeaf)), dstLeaf)
-	}
-	if apiCode(err) != api.CodeObjectExist || srcLeaf == dstLeaf {
+		arrived := f.absURI(path.Join(dstParent, srcLeaf))
+		err = f.rename(ctx, arrived, dstLeaf)
+		if err != nil && copy {
+			if delErr := f.delete(ctx, arrived); delErr != nil {
+				fs.Debugf(f, "Failed to remove the partial copy %q: %v", arrived, delErr)
+			}
+			if apiCode(err) == api.CodeObjectExist {
+				return fs.ErrorCantCopy
+			}
+		}
 		return err
 	}
+	if apiCode(err) != api.CodeObjectExist {
+		return err
+	}
+	// The server can't copy over a file, so rclone uploads a new version
 	if copy {
 		return fs.ErrorCantCopy
+	}
+	if srcLeaf == dstLeaf {
+		return err
 	}
 	// Rename then move, through a temporary name if the source
 	// folder already has something with the destination name.
@@ -895,7 +980,7 @@ func (f *Fs) Copy(ctx context.Context, src fs.Object, remote string) (fs.Object,
 	if err := f.relocate(ctx, srcObj.fs, srcObj.remote, remote, true); err != nil {
 		return nil, err
 	}
-	return f.NewObject(ctx, remote)
+	return f.relocated(ctx, remote, srcObj.modTime)
 }
 
 // Move src to this remote using server-side move operations.
@@ -907,7 +992,26 @@ func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (fs.Object,
 	if err := f.relocate(ctx, srcObj.fs, srcObj.remote, remote, false); err != nil {
 		return nil, err
 	}
-	return f.NewObject(ctx, remote)
+	return f.relocated(ctx, remote, srcObj.modTime)
+}
+
+// relocated returns the file moved or copied to remote, giving it back
+// modTime as the server resets it. The file has arrived by now, so
+// failing to do that isn't an error.
+func (f *Fs) relocated(ctx context.Context, remote string, modTime time.Time) (fs.Object, error) {
+	obj, err := f.NewObject(ctx, remote)
+	if err != nil {
+		return nil, err
+	}
+	o := obj.(*Object)
+	if !o.modTime.Equal(modTime) {
+		if err := f.patchModTime(ctx, f.uri(remote), o.entity, modTime); err != nil {
+			fs.Logf(o, "Failed to keep the modification time: %v", err)
+			return o, nil
+		}
+		o.modTime = modTime
+	}
+	return o, nil
 }
 
 // DirMove moves src, srcRemote to this remote at dstRemote
@@ -935,7 +1039,7 @@ func (f *Fs) About(ctx context.Context) (*fs.Usage, error) {
 	return &fs.Usage{
 		Total: fs.NewUsageValue(c.Total),
 		Used:  fs.NewUsageValue(c.Used),
-		Free:  fs.NewUsageValue(c.Total - c.Used),
+		Free:  fs.NewUsageValue(max(c.Total-c.Used, 0)),
 	}, nil
 }
 
@@ -957,6 +1061,41 @@ func (f *Fs) PublicLink(ctx context.Context, remote string, expire fs.Duration, 
 		return "", err
 	}
 	return link, nil
+}
+
+var commandHelp = []fs.CommandHelp{{
+	Name:  "policy",
+	Short: "Show the storage policy of a folder.",
+	Long: `This shows the storage policy uploads to a folder go to, whose ID
+is what the policy_id option takes.
+
+    rclone backend policy remote:
+    rclone backend policy remote: path/to/folder`,
+}}
+
+// Command runs a backend specific command
+func (f *Fs) Command(ctx context.Context, name string, arg []string, opt map[string]string) (any, error) {
+	switch name {
+	case "policy":
+		dir := ""
+		if len(arg) > 0 {
+			dir = arg[0]
+		}
+		opts := rest.Opts{
+			Method:     "GET",
+			Path:       "/file",
+			Parameters: url.Values{"uri": {f.uri(dir)}, "page_size": {"1"}},
+		}
+		var r api.ListResponse
+		if err := f.call(ctx, f.srv, &opts, nil, &r); err != nil {
+			return nil, err
+		}
+		if r.StoragePolicy == nil {
+			return nil, errors.New("cloudreve: the server didn't report a storage policy")
+		}
+		return r.StoragePolicy, nil
+	}
+	return nil, fs.ErrorCommandNotFound
 }
 
 // ------------------------------------------------------------
@@ -997,7 +1136,17 @@ func (o *Object) ModTime(ctx context.Context) time.Time {
 
 // SetModTime sets the modification time of the object
 func (o *Object) SetModTime(ctx context.Context, modTime time.Time) error {
-	return fs.ErrorCantSetModTime
+	if err := o.fs.checkWritable(); err != nil {
+		return err
+	}
+	if err := o.fs.patchModTime(ctx, o.fs.uri(o.remote), o.entity, modTime); err != nil {
+		if apiCode(err) == api.CodeParamErr {
+			return fs.ErrorCantSetModTime
+		}
+		return err
+	}
+	o.modTime = modTime
+	return nil
 }
 
 // Storable returns a boolean showing whether this object storable
@@ -1065,9 +1214,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	if err != nil {
 		return err
 	}
-	o.id = file.ID
-	o.size = file.Size
-	o.modTime = file.UpdatedAt
+	*o = *o.fs.newObject(o.remote, file)
 	return nil
 }
 
@@ -1093,6 +1240,7 @@ var (
 	_ fs.Abouter      = (*Fs)(nil)
 	_ fs.PublicLinker = (*Fs)(nil)
 	_ fs.ListPer      = (*Fs)(nil)
+	_ fs.Commander    = (*Fs)(nil)
 	_ fs.Object       = (*Object)(nil)
 	_ fs.IDer         = (*Object)(nil)
 )

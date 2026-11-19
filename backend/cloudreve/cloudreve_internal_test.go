@@ -324,6 +324,28 @@ func TestRelocateKeepsModTime(t *testing.T) {
 	assert.True(t, modTime.Equal(entries[0].ModTime(ctx)))
 }
 
+// TestCopyOverExisting checks a copy which can't replace its destination
+// leaves everything as it was, so rclone can upload a new version instead.
+func TestCopyOverExisting(t *testing.T) {
+	ctx := context.Background()
+	s := newFakeServer(t)
+	f := newTestFs(t, s, "")
+	modTime := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	o := putFile(t, f, "a/file.txt", "source", modTime)
+	putFile(t, f, "b/file.txt", "same name", modTime)
+	putFile(t, f, "b/other.txt", "other name", modTime)
+
+	for _, remote := range []string{"b/file.txt", "b/other.txt"} {
+		_, err := f.Copy(ctx, o, remote)
+		assert.ErrorIs(t, err, fs.ErrorCantCopy, remote)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	assert.Equal(t, "same name", string(s.nodes["b/file.txt"].data))
+	assert.Equal(t, "other name", string(s.nodes["b/other.txt"].data))
+	assert.Equal(t, []string{"b/file.txt", "b/other.txt"}, s.children("b"))
+}
+
 // TestSetModTime checks the recorded time and when it stops applying
 func TestSetModTime(t *testing.T) {
 	ctx := context.Background()

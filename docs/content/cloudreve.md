@@ -129,8 +129,9 @@ applying when any client uploads a new version.
 - Server-side copy only works between different folders. Within one
   folder rclone downloads and uploads.
 - Files go to the trash when deleted, unless `hard_delete` is set.
-- Names can't contain `\ / : * ? " < > |`. rclone encodes these
-  characters, see [encoding](/overview/#encoding).
+- Names can't contain `\ / : * ? " < > |`, control characters or a
+  trailing space. rclone encodes these characters, see
+  [encoding](/overview/#encoding).
 - Removing a public link with `rclone link --unlink` isn't supported.
   Delete it on the web.
 

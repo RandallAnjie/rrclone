@@ -112,9 +112,14 @@ AES-256-CTR. Turn this off to upload such files unencrypted.`,
 			Help:     config.ConfigEncodingHelp,
 			Advanced: true,
 			// Cloudreve rejects \ / : * ? " < > | and names of . or ..
+			// Local storage paths are built from the names, so a server
+			// on Windows can't store control characters or folders
+			// ending in a space.
 			Default: encoder.Base |
 				encoder.EncodeWin |
 				encoder.EncodeBackSlash |
+				encoder.EncodeCtl |
+				encoder.EncodeRightSpace |
 				encoder.EncodeInvalidUtf8,
 		}}...),
 	})
@@ -911,13 +916,27 @@ func (f *Fs) relocate(ctx context.Context, srcFs *Fs, srcRemote, dstRemote strin
 		if srcLeaf == dstLeaf {
 			return nil
 		}
-		return f.rename(ctx, f.absURI(path.Join(dstParent, srcLeaf)), dstLeaf)
-	}
-	if apiCode(err) != api.CodeObjectExist || srcLeaf == dstLeaf {
+		arrived := f.absURI(path.Join(dstParent, srcLeaf))
+		err = f.rename(ctx, arrived, dstLeaf)
+		if err != nil && copy {
+			if delErr := f.delete(ctx, arrived); delErr != nil {
+				fs.Debugf(f, "Failed to remove the partial copy %q: %v", arrived, delErr)
+			}
+			if apiCode(err) == api.CodeObjectExist {
+				return fs.ErrorCantCopy
+			}
+		}
 		return err
 	}
+	if apiCode(err) != api.CodeObjectExist {
+		return err
+	}
+	// The server can't copy over a file, so rclone uploads a new version
 	if copy {
 		return fs.ErrorCantCopy
+	}
+	if srcLeaf == dstLeaf {
+		return err
 	}
 	// Rename then move, through a temporary name if the source
 	// folder already has something with the destination name.

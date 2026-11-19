@@ -158,8 +158,11 @@ func parseURI(raw string) (string, error) {
 	return strings.Trim(u.Path, "/"), nil
 }
 
+// validName checks a name can be stored, including by a server on Windows
 func validName(name string) bool {
-	return name != "" && len(name) < 255 && !strings.ContainsAny(name, "\\/:*?\"<>|") && name != "." && name != ".."
+	hasCtl := strings.ContainsFunc(name, func(r rune) bool { return r < 0x20 })
+	return name != "" && len(name) < 255 && !strings.ContainsAny(name, "\\/:*?\"<>|") && name != "." && name != ".." &&
+		!hasCtl && !strings.HasSuffix(name, " ")
 }
 
 // mkdirAll makes p and its parents, returning false if a file is in the way

@@ -29,6 +29,7 @@ import (
 	"github.com/rclone/rclone/fs/sync"
 	"github.com/rclone/rclone/fstest"
 	"github.com/rclone/rclone/fstest/fstests"
+	"github.com/rclone/rclone/lib/accountrotation"
 	"github.com/rclone/rclone/lib/dircache"
 	"github.com/rclone/rclone/lib/pacer"
 	"github.com/rclone/rclone/lib/random"
@@ -183,7 +184,7 @@ func TestParseOAuthAccountFiles(t *testing.T) {
 	require.NoError(t, os.WriteFile(second, []byte(`{"access_token":"tok2","token_type":"Bearer"}`), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("ignore"), 0o600))
 
-	files, err := parseOAuthAccountFiles(strings.Join([]string{first, dir, filepath.Join(dir, "*.json")}, ","))
+	files, err := accountrotation.ParseFiles(strings.Join([]string{first, dir, filepath.Join(dir, "*.json")}, ","))
 	require.NoError(t, err)
 	assert.Equal(t, []string{first, second}, files)
 }
@@ -196,7 +197,7 @@ func TestTokenFileMapper(t *testing.T) {
 		require.NoError(t, os.WriteFile(tokenFile, []byte(tokenJSON), 0o600))
 
 		base := configmap.Simple{"scope": "drive", "token": "old_token", "client_id": "base_cid", "client_secret": "base_cs"}
-		m := &tokenFileMapper{base: base, file: tokenFile}
+		m := &accountrotation.TokenFileMapper{Base: base, File: tokenFile}
 
 		// Token comes from file, not base
 		v, ok := m.Get("token")
@@ -237,7 +238,7 @@ func TestTokenFileMapper(t *testing.T) {
 		require.NoError(t, os.WriteFile(tokenFile, []byte(structured), 0o600))
 
 		base := configmap.Simple{"scope": "drive", "client_id": "base_cid", "client_secret": "base_cs"}
-		m := &tokenFileMapper{base: base, file: tokenFile}
+		m := &accountrotation.TokenFileMapper{Base: base, File: tokenFile}
 
 		// Token is extracted from the "token" field
 		v, ok := m.Get("token")
@@ -262,7 +263,7 @@ func TestTokenFileMapper(t *testing.T) {
 		newToken := `{"access_token":"newtok","token_type":"Bearer"}`
 		m.Set("token", newToken)
 		// Read back through readOAuthAccountFile which normalises whitespace
-		gotCID, gotCS, gotTok, gotStructured, readErr := readOAuthAccountFile(tokenFile)
+		gotCID, gotCS, gotTok, gotStructured, readErr := accountrotation.ReadFile(tokenFile)
 		require.NoError(t, readErr)
 		assert.True(t, gotStructured)
 		assert.Equal(t, "mycid", gotCID)
@@ -290,7 +291,7 @@ func TestTokenFileMapper(t *testing.T) {
 		require.NoError(t, os.WriteFile(tokenFile, []byte(structured), 0o600))
 
 		base := configmap.Simple{"client_id": "base_cid", "client_secret": "base_cs"}
-		m := &tokenFileMapper{base: base, file: tokenFile}
+		m := &accountrotation.TokenFileMapper{Base: base, File: tokenFile}
 
 		// Token is extracted from the "token" field and missing
 		// expiry is normalized to force a refresh.
@@ -316,7 +317,7 @@ func TestReadOAuthAccountFile(t *testing.T) {
 		f := filepath.Join(dir, "legacy.json")
 		tokenJSON := `{"access_token":"tok","token_type":"Bearer"}`
 		require.NoError(t, os.WriteFile(f, []byte(tokenJSON), 0o600))
-		cid, cs, tok, structured, err := readOAuthAccountFile(f)
+		cid, cs, tok, structured, err := accountrotation.ReadFile(f)
 		require.NoError(t, err)
 		assert.False(t, structured)
 		assert.Equal(t, tokenJSON, tok)
@@ -329,7 +330,7 @@ func TestReadOAuthAccountFile(t *testing.T) {
 		inner := `{"access_token":"tok","token_type":"Bearer"}`
 		content := `{"client_id":"cid","client_secret":"cs","token":` + inner + `}`
 		require.NoError(t, os.WriteFile(f, []byte(content), 0o600))
-		cid, cs, tok, structured, err := readOAuthAccountFile(f)
+		cid, cs, tok, structured, err := accountrotation.ReadFile(f)
 		require.NoError(t, err)
 		assert.True(t, structured)
 		assert.Equal(t, "cid", cid)
@@ -338,7 +339,7 @@ func TestReadOAuthAccountFile(t *testing.T) {
 	})
 
 	t.Run("NotFound", func(t *testing.T) {
-		_, _, _, _, err := readOAuthAccountFile(filepath.Join(dir, "missing.json"))
+		_, _, _, _, err := accountrotation.ReadFile(filepath.Join(dir, "missing.json"))
 		assert.Error(t, err)
 	})
 }
@@ -360,6 +361,85 @@ func TestServiceAccountPoolAvailableCandidates(t *testing.T) {
 	candidates, wait = pool.availableCandidates("sa1.json", now, 10*time.Minute)
 	assert.Equal(t, []string{"sa2.json"}, candidates)
 	assert.InDelta(t, float64(7*time.Minute), float64(wait), float64(2*time.Second))
+}
+
+type headerTransport string
+
+func (h headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"X-Account": {string(h)}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+}
+
+func newTestRotator(t *testing.T, switches *atomic.Int32) *accountRotator {
+	pool := newServiceAccountPool("a.json", []string{"b.json", "c.json", "d.json"})
+	newClient := func(ctx context.Context, file string) (*http.Client, error) {
+		switches.Add(1)
+		return &http.Client{Transport: headerTransport(file)}, nil
+	}
+	return newAccountRotator("service account", pool, time.Minute, "a.json", &http.Client{Transport: headerTransport("a.json")}, newClient)
+}
+
+func quotaErrorFrom(t *testing.T, r *accountRotator) error {
+	resp, err := r.RoundTrip(httptest.NewRequest("GET", "http://example.com/", nil))
+	require.NoError(t, err)
+	return &googleapi.Error{Code: 403, Header: resp.Header, Errors: []googleapi.ErrorItem{{Reason: "userRateLimitExceeded"}}}
+}
+
+func TestAccountRotatorRoundTrip(t *testing.T) {
+	var switches atomic.Int32
+	r := newTestRotator(t, &switches)
+	f := &Fs{}
+
+	resp, err := r.RoundTrip(httptest.NewRequest("GET", "http://example.com/", nil))
+	require.NoError(t, err)
+	assert.Equal(t, "a.json", resp.Header.Get("X-Account"))
+	assert.Equal(t, "1", resp.Header.Get(accountHeader))
+
+	require.NoError(t, r.rotate(context.Background(), f, "userRateLimitExceeded", quotaErrorFrom(t, r)))
+	resp, err = r.RoundTrip(httptest.NewRequest("GET", "http://example.com/", nil))
+	require.NoError(t, err)
+	assert.Equal(t, "b.json", resp.Header.Get("X-Account"))
+	assert.Equal(t, "2", resp.Header.Get(accountHeader))
+	assert.Equal(t, "b.json", r.current())
+}
+
+// A burst of errors from the same account must only rotate once
+func TestAccountRotatorBurstRotatesOnce(t *testing.T) {
+	var switches atomic.Int32
+	r := newTestRotator(t, &switches)
+	f := &Fs{}
+
+	const n = 20
+	errs := make([]error, n)
+	for i := range errs {
+		errs[i] = quotaErrorFrom(t, r)
+	}
+	var wg stdsync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			assert.NoError(t, r.rotate(context.Background(), f, "userRateLimitExceeded", errs[i]))
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, int32(1), switches.Load())
+	assert.Equal(t, "b.json", r.current())
+
+	// A fresh error from the new account rotates again
+	require.NoError(t, r.rotate(context.Background(), f, "userRateLimitExceeded", quotaErrorFrom(t, r)))
+	assert.Equal(t, int32(2), switches.Load())
+	assert.Equal(t, "c.json", r.current())
+}
+
+func TestAccountRotatorExhausted(t *testing.T) {
+	var switches atomic.Int32
+	r := newTestRotator(t, &switches)
+	f := &Fs{}
+	for range 3 {
+		require.NoError(t, r.rotate(context.Background(), f, "userRateLimitExceeded", quotaErrorFrom(t, r)))
+	}
+	assert.Equal(t, "d.json", r.current())
+	assert.ErrorIs(t, r.rotate(context.Background(), f, "userRateLimitExceeded", quotaErrorFrom(t, r)), errNoAccountAvailable)
 }
 
 /*
@@ -1117,3 +1197,51 @@ func (f *Fs) InternalTest(t *testing.T) {
 }
 
 var _ fstests.InternalTester = (*Fs)(nil)
+
+func TestRefillListRInputStopsWhenInputClosed(t *testing.T) {
+	mu := stdsync.Mutex{}
+	wg := stdsync.WaitGroup{}
+	in := make(chan listREntry, listRInputBuffer)
+	overflow := []listREntry{{id: "folder", path: "folder"}}
+
+	mu.Lock()
+	close(in)
+	in = nil
+	mu.Unlock()
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- refillListRInput(&mu, &in, &overflow, &wg)
+	}()
+	select {
+	case ok := <-done:
+		require.False(t, ok, "refill continued after the input channel was closed")
+	case <-time.After(time.Second):
+		t.Fatal("refill blocked after the input channel was closed")
+	}
+	require.Len(t, overflow, 1)
+
+	finished := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(finished)
+	}()
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("refill incremented the wait group after the input channel was closed")
+	}
+}
+
+func TestRefillListRInputSendsQueuedDirectory(t *testing.T) {
+	mu := stdsync.Mutex{}
+	wg := stdsync.WaitGroup{}
+	in := make(chan listREntry, listRInputBuffer)
+	overflow := []listREntry{{id: "folder", path: "folder"}}
+
+	require.True(t, refillListRInput(&mu, &in, &overflow, &wg), "refill stopped while the input channel was open")
+	require.Empty(t, overflow)
+	got := <-in
+	require.Equal(t, listREntry{id: "folder", path: "folder"}, got)
+	wg.Done()
+}

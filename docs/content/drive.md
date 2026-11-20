@@ -370,6 +370,17 @@ client ID, client secret, and token all change together.
 
 Both formats can be mixed freely within the same `oauth_account_files` list.
 
+`rclone rc rotation/status` and the dashboard show the account in use
+and which accounts are cooling down, for both service account and
+OAuth account rotation.
+
+The easiest way to make a structured file is to authorise in the
+browser and let rclone write it (run it again to renew an account):
+
+```
+rclone authorize drive YOUR_CLIENT_ID YOUR_CLIENT_SECRET --account-file /path/to/tokens/account1.json
+```
+
 Example config using the structured format:
 
 ```
@@ -393,10 +404,15 @@ oauth_account_cooldown = 15m
   changes; `client_id` and `client_secret` are preserved). Legacy files are
   overwritten with the new raw token blob. This keeps tokens valid across
   rclone restarts regardless of format.
-- OAuth rotation is serialized under concurrent retries. When multiple mount or
-  transfer workers hit `403 userRateLimitExceeded` at the same time, rclone now
-  performs one account switch at a time so the whole candidate pool does not get
-  pushed into cooldown at once.
+- Rotation (OAuth and service account) is safe under concurrent transfers.
+  Every response is tagged with the account that served it, so when many
+  workers hit `403 userRateLimitExceeded` at once rclone switches account
+  once and simply retries the other requests on the new account, instead of
+  pushing the whole candidate pool into cooldown.
+- `storageQuotaExceeded` on a Shared Drive does not trigger rotation: the
+  Shared Drive is full whichever account writes to it.
+- With `--drive-stop-on-upload-limit`, rclone first rotates to an alternate
+  account and only stops once every account is cooling down.
 - Drive quota and rate-limit events now emit `INFO` logs with rotation context.
   The log includes the current account, alternate accounts being tried, the
   account selected after a successful switch, and a cooldown summary when every
@@ -407,7 +423,6 @@ Typical `INFO` logs look like this:
 ```text
 INFO  : Google drive root '': Google Drive API 403 userRateLimitExceeded: User rate limit exceeded.
 INFO  : Google drive root '': Drive error "userRateLimitExceeded" on OAuth account "w25929138@gmail.com.json"; trying 3 alternate account(s): [noreply.randallanjie@gmail.com.json, randallzhuanjie@gmail.com.json, turkiye.randall@gmail.com.json]
-INFO  : Google drive root '': Changing OAuth account from "w25929138@gmail.com.json" to "noreply.randallanjie@gmail.com.json"
 INFO  : Google drive root '': Switched OAuth account from "w25929138@gmail.com.json" to "noreply.randallanjie@gmail.com.json" after Drive error "userRateLimitExceeded"
 ```
 
@@ -646,6 +661,50 @@ token = {"access_token":"..."}
 auth_url = https://accounts.example.com/o/oauth2/auth
 token_url = https://oauth2.example.com/token
 endpoint = https://googleapis.example.com
+```
+
+### Direct connection to Google IPs
+
+Where DNS for Google is poisoned or the default route is filtered, some
+Google front-end IPs are often still reachable. With `direct = true`
+(`--drive-direct`) rclone probes candidate IPs with a real, unauthenticated
+Drive API call, keeps the ones that answer, and dials the fastest of them
+for the Drive hosts. The idea comes from
+[gdirect](https://github.com/mizorewww/gdirect).
+
+| Traffic | Route in direct mode |
+| --- | --- |
+| Drive API, uploads, downloads (`www.googleapis.com`, `drive.google.com`, `drive.usercontent.google.com`, `*.googleusercontent.com`) | Scanned Google IP, HTTP proxy bypassed, certificate verified for the real hostname |
+| Token refresh (`oauth2.googleapis.com`) and browser login | Normal network (system DNS and proxy) |
+
+- Candidates are a built-in seed IP, the system DNS answers for the Drive
+  hosts and every IP that worked before. Set `direct_ips` to probe only
+  your own list.
+- Results are cached in the rclone cache directory for `direct_rescan`
+  (default 24h). An IP that fails is skipped for 5 minutes and the next
+  one is tried. If none works, rclone falls back to the normal network.
+- `direct_sni` sends a different TLS SNI, or none with `off`. Some Google
+  front ends only serve a valid certificate when the SNI is set, so test
+  it with the backend command below first.
+- If a TUN proxy or VPN is running (Clash/Mihomo TUN for example), set
+  the Google IPs to DIRECT and exclude them from fake-ip, otherwise every
+  probe fails.
+- Token refresh still needs a working route to `oauth2.googleapis.com`,
+  either a proxy or `token_url` (see [Custom API endpoint](#custom-api-endpoint)).
+
+Check which IPs work, then enable it:
+
+```console
+rclone backend direct gdrive: -o scan
+rclone lsd gdrive: --drive-direct
+```
+
+```ini
+[gdrive]
+type = drive
+direct = true
+# optional
+direct_ips = 142.250.1.1,142.250.1.2
 ```
 
 ### Import/Export of google documents
@@ -1285,7 +1344,7 @@ recommended usage is using the flag form --drive-size-as-quota when
 doing rclone ls/lsl/lsf/lsjson/etc only.
 
 If you do use this flag for syncing (not recommended) then you will
-need to use --ignore size also.
+need to use --ignore-size also.
 
 Properties:
 
@@ -2036,6 +2095,32 @@ Third delete all orphaned files to the trash:
 rclone backend rescue drive: -o delete
 ```
 
+### direct
+
+Show or refresh the Google IPs used by direct mode.
+
+```console
+rclone backend direct remote: [options] [<arguments>+]
+```
+
+This command shows the cached probe results for direct mode (the
+direct option): every candidate IP, its latency and the last error.
+
+Usage examples:
+
+```console
+rclone backend direct drive:
+rclone backend direct drive: -o scan
+rclone backend direct drive: -o scan --drive-direct-ips 142.250.1.1,142.250.1.2
+```
+
+With -o scan it probes the candidates now and saves the result, even if
+direct mode is off, so you can check which IPs work before enabling it.
+
+Options:
+
+- "scan": Probe the candidate IPs now
+
 <!-- autogenerated options stop -->
 
 ## Limitations
@@ -2182,6 +2267,15 @@ Scroll down and click "+ Add users". Add yourself as a test user and press save.
 
 9. Go to "Audience" and then click "PUBLISH APP" button and confirm.
    Add yourself as a test user if you haven't already.
+
+    (If the "PUBLISH APP" button is greyed out, Google now requires a
+    homepage URL and a privacy policy URL before publishing, even for a
+    personal single-user app. Go to "Branding" in the left panel, fill in
+    "Application home page" and "Application privacy policy link" - a free
+    GitHub Pages site is fine for these if you don't have a domain of your
+    own - then "Authorized domains" with the domain you used, and click
+    Save. Return to "Audience" and the "PUBLISH APP" button should now be
+    available.)
 
 10. Provide the noted client ID and client secret to rclone.
 

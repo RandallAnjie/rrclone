@@ -11,7 +11,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -42,6 +41,7 @@ import (
 	"github.com/rclone/rclone/fs/hash"
 	"github.com/rclone/rclone/fs/list"
 	"github.com/rclone/rclone/fs/operations"
+	"github.com/rclone/rclone/lib/accountrotation"
 	"github.com/rclone/rclone/lib/dircache"
 	"github.com/rclone/rclone/lib/encoder"
 	"github.com/rclone/rclone/lib/env"
@@ -602,7 +602,7 @@ recommended usage is using the flag form --drive-size-as-quota when
 doing rclone ls/lsl/lsf/lsjson/etc only.
 
 If you do use this flag for syncing (not recommended) then you will
-need to use --ignore size also.`,
+need to use --ignore-size also.`,
 			Advanced: true,
 			Hide:     fs.OptionHideConfigurator,
 		}, {
@@ -829,6 +829,58 @@ https://accounts.google.com/o/oauth2/auth.`,
 				Help:  "Reverse proxy for www.googleapis.com",
 			}},
 		}, {
+			Name: "direct",
+			Help: `Connect to Google Drive through scanned Google IPs (gdirect mode).
+
+When enabled, rclone probes candidate Google front-end IPs with a real
+Drive API request and dials the fastest working ones for the Drive hosts
+(www.googleapis.com, drive.google.com, drive.usercontent.google.com,
+*.googleusercontent.com). The HTTP proxy is bypassed for those hosts, and
+TLS is still verified against the real hostname.
+
+Token refresh (oauth2.googleapis.com) uses the normal network, so it may
+still need a proxy or token_url.
+
+Results are cached in the rclone cache directory and reused for
+direct_rescan. If no IP works, rclone falls back to the normal network.
+
+Inspired by https://github.com/mizorewww/gdirect.`,
+			Default:  false,
+			Advanced: true,
+		}, {
+			Name: "direct_ips",
+			Help: `Candidate Google IPs to probe in direct mode.
+
+Comma separated. When set, only these IPs are probed. When blank, rclone
+probes a built-in seed IP, the system DNS answers for the Drive hosts and
+every IP that worked before.
+
+If a TUN proxy or VPN is running, set these IPs to DIRECT and exclude
+them from fake-ip, or every probe will fail.`,
+			Default:  fs.CommaSepList{},
+			Advanced: true,
+		}, {
+			Name: "direct_sni",
+			Help: `TLS SNI to send to Drive hosts in direct mode.
+
+Leave blank to send the real hostname. Set a hostname to send that
+instead, or "off" to send no SNI. The certificate is always verified
+against the real hostname.`,
+			Default:  "",
+			Advanced: true,
+			Examples: []fs.OptionExample{{
+				Value: "",
+				Help:  "Send the real hostname",
+			}, {
+				Value: "off",
+				Help:  "Send no SNI",
+			}},
+		}, {
+			Name:     "direct_rescan",
+			Help:     "How long direct mode trusts a scan before probing again.",
+			Default:  fs.Duration(24 * time.Hour),
+			Advanced: true,
+		}, {
 			Name:     "env_auth",
 			Help:     "Get IAM credentials from runtime (environment variables or instance meta data if no env vars).\n\nOnly applies if service_account_file and service_account_credentials is blank.",
 			Default:  false,
@@ -908,6 +960,10 @@ type Options struct {
 	Enc                       encoder.MultiEncoder `config:"encoding"`
 	EnvAuth                   bool                 `config:"env_auth"`
 	Endpoint                  string               `config:"endpoint"`
+	Direct                    bool                 `config:"direct"`
+	DirectIPs                 fs.CommaSepList      `config:"direct_ips"`
+	DirectSNI                 string               `config:"direct_sni"`
+	DirectRescan              fs.Duration          `config:"direct_rescan"`
 }
 
 // Fs represents a remote drive server
@@ -934,10 +990,7 @@ type Fs struct {
 	dirResourceKeys  *sync.Map                    // map directory ID to resource key
 	permissionsMu    *sync.Mutex                  // protect the below
 	permissions      map[string]*drive.Permission // map permission IDs to Permissions
-	saPool           *serviceAccountPool
-	oaPool           *serviceAccountPool // pool for regular OAuth account rotation
-	currentOAFile    string              // active oauth account file (empty = default account)
-	oaRotateMu       sync.Mutex          // serialize OAuth account rotation under concurrent rate-limit errors
+	rotator          *accountRotator              // non-nil if service account or OAuth account rotation is enabled
 }
 
 type serviceAccountPool struct {
@@ -945,8 +998,6 @@ type serviceAccountPool struct {
 	files     []string
 	cooldowns map[string]time.Time
 }
-
-var errNoServiceAccountAvailable = errors.New("no alternate service account available")
 
 func newServiceAccountPool(current string, extra []string) *serviceAccountPool {
 	seen := map[string]struct{}{}
@@ -1282,15 +1333,10 @@ func (f *Fs) shouldRetry(ctx context.Context, err error) (bool, error) {
 					fs.Infof(f, "%s", msg)
 				}
 			}
-			if shouldRotateServiceAccount(reason) {
-				if f.saPool != nil {
-					if rotateErr := f.rotateServiceAccount(ctx, reason, err); rotateErr == nil {
-						return true, err
-					}
-				} else if f.oaPool != nil {
-					if rotateErr := f.rotateOAuthAccount(ctx, reason, err); rotateErr == nil {
-						return true, err
-					}
+			// A full Shared Drive stays full whichever account writes to it
+			if f.rotator != nil && shouldRotateServiceAccount(reason) && (reason != "storageQuotaExceeded" || !f.isTeamDrive) {
+				if rotateErr := f.rotator.rotate(ctx, f, reason, err); rotateErr == nil {
+					return true, err
 				}
 			}
 			if reason == "rateLimitExceeded" || reason == "userRateLimitExceeded" {
@@ -1619,6 +1665,9 @@ func getClient(ctx context.Context, opt *Options) *http.Client {
 		if opt.DisableHTTP2 {
 			t.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
 		}
+		if opt.Direct {
+			applyDirect(t, opt)
+		}
 	})
 	return &http.Client{
 		Transport: t,
@@ -1688,329 +1737,166 @@ func createOAuthClient(ctx context.Context, opt *Options, name string, m configm
 	return oAuthClient, nil
 }
 
-func (f *Fs) rotateServiceAccount(ctx context.Context, reason string, cause error) error {
-	if f.saPool == nil || f.opt.ServiceAccountCooldown <= 0 {
-		return errNoServiceAccountAvailable
+// accountHeader is added to every response passing through an
+// accountRotator so shouldRetry can tell which account served it.
+const accountHeader = "X-Rclone-Drive-Account"
+
+// accountState is the account an accountRotator currently uses
+type accountState struct {
+	client *http.Client
+	file   string
+	gen    uint64
+}
+
+// accountRotator is an http.RoundTripper which sends requests through
+// the currently active account.
+//
+// The Drive services are built once on top of it, so switching account
+// is a single atomic swap and never races with requests in flight.
+type accountRotator struct {
+	mu       sync.Mutex // serialises rotations
+	cur      atomic.Pointer[accountState]
+	pool     *serviceAccountPool
+	cooldown time.Duration
+	kind     string // "service account" or "OAuth account"
+	// newClient makes an authorised client for an account file
+	newClient func(ctx context.Context, file string) (*http.Client, error)
+
+	// For rotation/status, protected by statsMu so reports don't wait
+	// for a rotation in progress
+	name       string
+	statsMu    sync.Mutex
+	switches   int64
+	lastSwitch time.Time
+	lastReason string
+}
+
+var errNoAccountAvailable = errors.New("no alternate account available")
+
+func newAccountRotator(kind string, pool *serviceAccountPool, cooldown time.Duration, file string, client *http.Client, newClient func(ctx context.Context, file string) (*http.Client, error)) *accountRotator {
+	r := &accountRotator{
+		pool:      pool,
+		cooldown:  cooldown,
+		kind:      kind,
+		newClient: newClient,
 	}
-	current := f.opt.ServiceAccountFile
-	candidates, wait := f.saPool.availableCandidates(current, time.Now(), time.Duration(f.opt.ServiceAccountCooldown))
-	if len(candidates) == 0 {
-		if wait > 0 {
-			fs.Debugf(f, "Service account %q hit %s, all alternates are cooling down for up to %v", current, reason, wait)
-		}
-		return errNoServiceAccountAvailable
+	r.cur.Store(&accountState{client: client, file: file, gen: 1})
+	return r
+}
+
+// RoundTrip implements http.RoundTripper
+func (r *accountRotator) RoundTrip(req *http.Request) (*http.Response, error) {
+	st := r.cur.Load()
+	transport := st.client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
 	}
-	var changeErr error
-	for _, candidate := range candidates {
-		changeErr = f.changeServiceAccountFile(ctx, candidate)
-		if changeErr == nil {
-			f.saPool.add(candidate)
-			fs.Infof(f, "Switched service account from %q to %q after Drive error %q", current, candidate, reason)
+	resp, err := transport.RoundTrip(req)
+	if resp != nil {
+		resp.Header.Set(accountHeader, strconv.FormatUint(st.gen, 10))
+	}
+	return resp, err
+}
+
+// current returns the active account file
+func (r *accountRotator) current() string {
+	return r.cur.Load().file
+}
+
+// rotate switches away from the account which produced cause.
+//
+// It returns nil if the request should be retried, either because a
+// new account is active or because another request already rotated
+// away from the failing account.
+func (r *accountRotator) rotate(ctx context.Context, f *Fs, reason string, cause error) error {
+	if r.cooldown <= 0 {
+		return errNoAccountAvailable
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	st := r.cur.Load()
+	var gerr *googleapi.Error
+	if errors.As(cause, &gerr) && gerr.Header != nil {
+		if gen, err := strconv.ParseUint(gerr.Header.Get(accountHeader), 10, 64); err == nil && gen != st.gen {
+			// Request was served by an account we've already left
+			fs.Debugf(f, "Drive error %q came from a previous %s, retrying with %q", reason, r.kind, formatAccountShort(st.file))
 			return nil
 		}
-		f.saPool.markCooldown(candidate, time.Now().Add(time.Duration(f.opt.ServiceAccountCooldown)))
-		fs.Errorf(f, "Failed to switch service account from %q to %q after %q: %v", current, candidate, reason, changeErr)
 	}
-	if changeErr == nil {
-		changeErr = cause
-	}
-	return changeErr
-}
 
-// oauthAccountFileData holds the contents of a structured OAuth account file.
-// When this format is used, per-account client credentials are stored alongside
-// the token so that each account can use its own OAuth application.
-type oauthAccountFileData struct {
-	ClientID     string          `json:"client_id,omitempty"`
-	ClientSecret string          `json:"client_secret,omitempty"`
-	Token        json.RawMessage `json:"token,omitempty"`
-}
-
-// readOAuthAccountFile reads the file at path and returns its parsed contents.
-// Two formats are supported:
-//   - Structured: {"client_id":"…","client_secret":"…","token":{…}}
-//   - Legacy:     the file contains only the raw OAuth token JSON blob
-//
-// When the file contains a top-level "token" JSON object the structured format
-// is assumed and isStructured is true. Otherwise the entire file content is
-// returned as tokenJSON and isStructured is false.
-func readOAuthAccountFile(path string) (clientID, clientSecret, tokenJSON string, isStructured bool, err error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", "", "", false, err
-	}
-	var d oauthAccountFileData
-	if jsonErr := json.Unmarshal(data, &d); jsonErr == nil && len(d.Token) > 0 {
-		compacted := &bytes.Buffer{}
-		if compactErr := json.Compact(compacted, d.Token); compactErr == nil {
-			return d.ClientID, d.ClientSecret, compacted.String(), true, nil
-		}
-		return d.ClientID, d.ClientSecret, string(d.Token), true, nil
-	}
-	return "", "", strings.TrimSpace(string(data)), false, nil
-}
-
-// normalizeTokenExpiry checks the raw OAuth token JSON and, when the "expiry"
-// field is absent or set to the Go zero time ("0001-01-01T00:00:00Z"), replaces
-// it with a time safely in the past ("1970-01-01T00:00:00Z").  This forces the
-// oauth2 library to treat the access_token as expired and obtain a fresh one
-// via the refresh_token, rather than using the stale access_token as-is.
-func normalizeTokenExpiry(tokenJSON string) string {
-	var m map[string]interface{}
-	if err := json.Unmarshal([]byte(tokenJSON), &m); err != nil {
-		return tokenJSON
-	}
-	const zeroExpiry = "0001-01-01T00:00:00Z"
-	const pastExpiry = "1970-01-01T00:00:00Z"
-	expiry, _ := m["expiry"].(string)
-	if expiry == "" || expiry == zeroExpiry {
-		m["expiry"] = pastExpiry
-		if b, err := json.Marshal(m); err == nil {
-			return string(b)
-		}
-	}
-	return tokenJSON
-}
-
-// tokenFileMapper is a configmap.Mapper that reads/writes OAuth credentials
-// from/to a JSON file while delegating all other keys to the base mapper.
-//
-// Two file formats are supported:
-//   - Structured: {"client_id":"…","client_secret":"…","token":{…}}
-//     client_id and client_secret override the base mapper so each account
-//     can use its own OAuth application. Token refreshes update only the
-//     "token" field while preserving the client credentials in the file.
-//   - Legacy: the file contains only the raw OAuth token JSON blob.
-//     Only the token key is served from the file; client_id and client_secret
-//     fall through to the base mapper. This is backward-compatible with files
-//     created by earlier versions of this feature.
-type tokenFileMapper struct {
-	base configmap.Mapper
-	file string
-	mu   sync.Mutex
-}
-
-func (m *tokenFileMapper) Get(key string) (string, bool) {
-	switch key {
-	case config.ConfigToken:
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		_, _, tokenJSON, _, err := readOAuthAccountFile(m.file)
-		if err != nil {
-			return "", false
-		}
-		// If the token has a zero or missing expiry the Go oauth2 library
-		// treats it as never-expiring and uses the (stale) access_token
-		// directly without refreshing.  Force a refresh by replacing the
-		// zero expiry with a time safely in the past.
-		tokenJSON = normalizeTokenExpiry(tokenJSON)
-		return tokenJSON, true
-	case config.ConfigClientID, config.ConfigClientSecret:
-		m.mu.Lock()
-		clientID, clientSecret, _, structured, err := readOAuthAccountFile(m.file)
-		m.mu.Unlock()
-		if err == nil && structured {
-			if key == config.ConfigClientID && clientID != "" {
-				return clientID, true
-			}
-			if key == config.ConfigClientSecret && clientSecret != "" {
-				return clientSecret, true
-			}
-		}
-		return m.base.Get(key)
-	default:
-		return m.base.Get(key)
-	}
-}
-
-func (m *tokenFileMapper) Set(key, value string) {
-	if key != config.ConfigToken {
-		m.base.Set(key, value)
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	clientID, clientSecret, _, structured, err := readOAuthAccountFile(m.file)
-	if err == nil && structured {
-		// Structured format: update only the token field, preserving client credentials.
-		// Compact the token JSON so the inner blob is stored without extra whitespace.
-		compacted := &bytes.Buffer{}
-		if compactErr := json.Compact(compacted, []byte(value)); compactErr != nil {
-			compacted.Reset()
-			compacted.WriteString(value)
-		}
-		d := oauthAccountFileData{
-			ClientID:     clientID,
-			ClientSecret: clientSecret,
-			Token:        json.RawMessage(compacted.Bytes()),
-		}
-		updated, marshalErr := json.MarshalIndent(d, "", "  ")
-		if marshalErr != nil {
-			fs.Errorf(nil, "drive: failed to marshal updated account file %q: %v", m.file, marshalErr)
-			return
-		}
-		if writeErr := os.WriteFile(m.file, updated, 0o600); writeErr != nil {
-			fs.Errorf(nil, "drive: failed to save refreshed token to %q: %v", m.file, writeErr)
-		}
-		return
-	}
-	// Legacy format: the file contains only the raw token JSON blob.
-	if writeErr := os.WriteFile(m.file, []byte(value), 0o600); writeErr != nil {
-		fs.Errorf(nil, "drive: failed to save refreshed token to %q: %v", m.file, writeErr)
-	}
-}
-
-var errNoOAuthAccountAvailable = errors.New("no alternate OAuth account available")
-
-// parseOAuthAccountFiles expands the spec the same way as parseServiceAccountFiles
-// but accepts any file type (not only .json extension filtering is needed for
-// directory expansion).
-func parseOAuthAccountFiles(spec string) ([]string, error) {
-	parts := strings.FieldsFunc(spec, func(r rune) bool {
-		return r == ',' || r == '\n' || r == '\r'
-	})
-	seen := map[string]struct{}{}
-	files := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		expanded, err := expandOAuthAccountSpec(env.ShellExpand(part))
-		if err != nil {
-			return nil, err
-		}
-		for _, file := range expanded {
-			if _, ok := seen[file]; ok {
-				continue
-			}
-			seen[file] = struct{}{}
-			files = append(files, file)
-		}
-	}
-	return files, nil
-}
-
-func expandOAuthAccountSpec(spec string) ([]string, error) {
-	if strings.ContainsAny(spec, "*?[") {
-		matches, err := filepath.Glob(spec)
-		if err != nil {
-			return nil, fmt.Errorf("invalid oauth account glob %q: %w", spec, err)
-		}
-		if len(matches) == 0 {
-			return nil, fmt.Errorf("oauth account glob %q matched no files", spec)
-		}
-		sort.Strings(matches)
-		return matches, nil
-	}
-	info, err := os.Stat(spec)
-	if err != nil {
-		return nil, fmt.Errorf("couldn't access oauth account file %q: %w", spec, err)
-	}
-	if !info.IsDir() {
-		return []string{spec}, nil
-	}
-	entries, err := os.ReadDir(spec)
-	if err != nil {
-		return nil, fmt.Errorf("couldn't read oauth account directory %q: %w", spec, err)
-	}
-	files := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") {
-			continue
-		}
-		files = append(files, filepath.Join(spec, entry.Name()))
-	}
-	if len(files) == 0 {
-		return nil, fmt.Errorf("oauth account directory %q contained no JSON files", spec)
-	}
-	sort.Strings(files)
-	return files, nil
-}
-
-func (f *Fs) rotateOAuthAccount(ctx context.Context, reason string, cause error) error {
-	if f.oaPool == nil || f.opt.OAuthAccountCooldown <= 0 {
-		return errNoOAuthAccountAvailable
-	}
-	f.oaRotateMu.Lock()
-	defer f.oaRotateMu.Unlock()
-
-	current := f.currentOAFile
 	now := time.Now()
-	candidates, wait := f.oaPool.availableCandidates(current, now, time.Duration(f.opt.OAuthAccountCooldown))
+	candidates, wait := r.pool.availableCandidates(st.file, now, r.cooldown)
 	if len(candidates) == 0 {
-		snapshot := formatCooldownSummary(f.oaPool.cooldownSnapshot(time.Now()))
 		if wait > 0 {
-			fs.Infof(f, "Drive error %q on OAuth account %q; all %d alternates are cooling down for up to %v; cooldowns=%s", reason, formatAccountShort(current), f.oaPool.fileCount(), wait.Round(time.Second), snapshot)
+			fs.Infof(f, "Drive error %q on %s %q; all %d alternates are cooling down for up to %v; cooldowns=%s", reason, r.kind, formatAccountShort(st.file), r.pool.fileCount(), wait.Round(time.Second), formatCooldownSummary(r.pool.cooldownSnapshot(now)))
 		}
-		return errNoOAuthAccountAvailable
+		return errNoAccountAvailable
 	}
-
-	fs.Infof(f, "Drive error %q on OAuth account %q; trying %d alternate account(s): %s", reason, formatAccountShort(current), len(candidates), formatAccountList(candidates))
-
-	var changeErr error
+	fs.Infof(f, "Drive error %q on %s %q; trying %d alternate account(s): %s", reason, r.kind, formatAccountShort(st.file), len(candidates), formatAccountList(candidates))
+	err := cause
 	for _, candidate := range candidates {
-		changeErr = f.changeOAuthAccountFile(ctx, candidate)
-		if changeErr == nil {
-			f.oaPool.add(candidate)
-			fs.Infof(f, "Switched OAuth account from %q to %q after Drive error %q", formatAccountShort(current), formatAccountShort(candidate), reason)
+		var client *http.Client
+		client, err = r.newClient(ctx, candidate)
+		if err == nil {
+			r.cur.Store(&accountState{client: client, file: candidate, gen: st.gen + 1})
+			r.pool.markCooldown(candidate, time.Time{})
+			r.statsMu.Lock()
+			r.switches++
+			r.lastSwitch = time.Now()
+			r.lastReason = reason
+			r.statsMu.Unlock()
+			fs.Infof(f, "Switched %s from %q to %q after Drive error %q", r.kind, formatAccountShort(st.file), formatAccountShort(candidate), reason)
 			return nil
 		}
-		f.oaPool.markCooldown(candidate, time.Now().Add(time.Duration(f.opt.OAuthAccountCooldown)))
-		fs.Infof(f, "Failed switching OAuth account from %q to %q after Drive error %q: %v", formatAccountShort(current), formatAccountShort(candidate), reason, changeErr)
+		r.pool.markCooldown(candidate, time.Now().Add(r.cooldown))
+		fs.Errorf(f, "Failed to switch %s from %q to %q after Drive error %q: %v", r.kind, formatAccountShort(st.file), formatAccountShort(candidate), reason, err)
 	}
-	if changeErr == nil {
-		changeErr = cause
-	}
-	return changeErr
+	return err
 }
 
-func (f *Fs) changeOAuthAccountFile(ctx context.Context, file string) (err error) {
-	fs.Infof(f, "Changing OAuth account from %q to %q", formatAccountShort(f.currentOAFile), formatAccountShort(file))
-	if file == f.currentOAFile {
+// switchTo makes file the active account
+func (r *accountRotator) switchTo(ctx context.Context, file string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st := r.cur.Load()
+	if file == st.file {
 		return nil
 	}
-	oldSvc := f.svc
-	oldv2Svc := f.v2Svc
-	oldOAuthClient := f.client
-	oldFile := f.currentOAFile
-	defer func() {
-		if err != nil {
-			f.svc = oldSvc
-			f.v2Svc = oldv2Svc
-			f.client = oldOAuthClient
-			f.currentOAFile = oldFile
-		}
-	}()
-	f.currentOAFile = file
-	m := &tokenFileMapper{base: f.m, file: file}
-	oAuthClient, ts, err := oauthutil.NewClientWithBaseClient(ctx, f.name, m, driveConfig, getClient(ctx, &f.opt))
+	client, err := r.newClient(ctx, file)
 	if err != nil {
-		return fmt.Errorf("drive: failed when making oauth client from account file %q: %w", file, err)
+		return err
 	}
-	// Verify the token is usable (e.g. refresh_token is valid) before
-	// committing to this account.  A failure here lets the caller try the
-	// next candidate rather than discovering the problem on the first real
-	// API call.
-	if _, tokenErr := ts.Token(); tokenErr != nil {
-		return fmt.Errorf("drive: token validation failed for account file %q: %w", file, tokenErr)
-	}
-	f.client = oAuthClient
-	f.svc, err = drive.NewService(context.Background(), f.driveClientOptions()...)
-	if err != nil {
-		return fmt.Errorf("couldn't create Drive client: %w", err)
-	}
-	if f.opt.V2DownloadMinSize >= 0 {
-		f.v2Svc, err = drive_v2.NewService(context.Background(), f.driveClientOptionsFor("v2")...)
-		if err != nil {
-			return fmt.Errorf("couldn't create Drive v2 client: %w", err)
-		}
-	}
-	if f.oaPool != nil {
-		f.oaPool.add(file)
-		f.oaPool.markCooldown(file, time.Time{})
-	}
+	r.pool.add(file)
+	r.cur.Store(&accountState{client: client, file: file, gen: st.gen + 1})
 	return nil
+}
+
+// newServiceAccountClient makes a client for the service account in file
+func (f *Fs) newServiceAccountClient(ctx context.Context, file string) (*http.Client, error) {
+	opt := f.opt
+	opt.ServiceAccountFile = file
+	opt.ServiceAccountCredentials = ""
+	client, err := createOAuthClient(ctx, &opt, f.name, f.m)
+	if err != nil {
+		return nil, fmt.Errorf("drive: failed when making oauth client from service account file %q: %w", file, err)
+	}
+	return client, nil
+}
+
+// newOAuthAccountClient makes a client for the OAuth token in file
+func (f *Fs) newOAuthAccountClient(ctx context.Context, file string) (*http.Client, error) {
+	m := &accountrotation.TokenFileMapper{Base: f.m, File: file}
+	client, ts, err := oauthutil.NewClientWithBaseClient(ctx, f.name, m, driveConfig, getClient(ctx, &f.opt))
+	if err != nil {
+		return nil, fmt.Errorf("drive: failed when making oauth client from account file %q: %w", file, err)
+	}
+	// Check the token is usable (e.g. refresh_token is valid) before
+	// committing to this account so the caller can try the next one.
+	if _, err := ts.Token(); err != nil {
+		return nil, fmt.Errorf("drive: token validation failed for account file %q: %w", file, err)
+	}
+	return client, nil
 }
 
 func checkUploadChunkSize(cs fs.SizeSuffix) error {
@@ -2070,7 +1956,7 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 		opt.ServiceAccountFile = serviceAccountFiles[0]
 	}
 
-	oauthAccountFiles, err := parseOAuthAccountFiles(opt.OAuthAccountFiles)
+	oauthAccountFiles, err := accountrotation.ParseFiles(opt.OAuthAccountFiles)
 	if err != nil {
 		return nil, fmt.Errorf("drive: oauth account files: %w", err)
 	}
@@ -2078,7 +1964,7 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 	currentOAuthAccountFile := ""
 	if opt.ServiceAccountCredentials == "" && opt.ServiceAccountFile == "" && !opt.EnvAuth && len(oauthAccountFiles) > 0 {
 		currentOAuthAccountFile = oauthAccountFiles[0]
-		oauthMapper = &tokenFileMapper{base: m, file: currentOAuthAccountFile}
+		oauthMapper = &accountrotation.TokenFileMapper{Base: m, File: currentOAuthAccountFile}
 		fs.Infof(nil, "drive: loaded %d OAuth account files for rotation (cooldown: %v)", len(oauthAccountFiles), opt.OAuthAccountCooldown)
 	}
 
@@ -2106,9 +1992,6 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 		dirResourceKeys: new(sync.Map),
 		permissionsMu:   new(sync.Mutex),
 		permissions:     make(map[string]*drive.Permission),
-		saPool:          newServiceAccountPool(opt.ServiceAccountFile, serviceAccountFiles),
-		oaPool:          newServiceAccountPool("", oauthAccountFiles),
-		currentOAFile:   currentOAuthAccountFile,
 	}
 	f.isTeamDrive = opt.TeamDriveID != ""
 	f.features = (&fs.Features{
@@ -2128,8 +2011,20 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 		DirModTimeUpdatesOnWrite: false, // FIXME need to check!
 	}).Fill(ctx, f)
 
+	// Set up account rotation if more than one account is available
+	if pool := newServiceAccountPool(opt.ServiceAccountFile, serviceAccountFiles); opt.ServiceAccountCredentials == "" && pool.fileCount() > 1 {
+		f.rotator = newAccountRotator("service account", pool, time.Duration(opt.ServiceAccountCooldown), opt.ServiceAccountFile, oAuthClient, f.newServiceAccountClient)
+	} else if currentOAuthAccountFile != "" && len(oauthAccountFiles) > 1 {
+		f.rotator = newAccountRotator("OAuth account", newServiceAccountPool("", oauthAccountFiles), time.Duration(opt.OAuthAccountCooldown), currentOAuthAccountFile, oAuthClient, f.newOAuthAccountClient)
+	}
+
 	// Create a new authorized Drive client.
 	f.client = oAuthClient
+	if f.rotator != nil {
+		f.client = &http.Client{Transport: f.rotator}
+		f.rotator.name = name
+		accountrotation.Register(name, f.rotator)
+	}
 	f.svc, err = drive.NewService(context.Background(), f.driveClientOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't create Drive client: %w", err)
@@ -2998,15 +2893,9 @@ func (f *Fs) ListR(ctx context.Context, dir string, callback fs.ListRCallback) (
 		wg.Wait()
 		// if the input channel overflowed add the collected entries to the channel now
 		for len(overflow) > 0 {
-			mu.Lock()
-			// only fill half of the channel to prevent entries being put into overflow again
-			l := min(len(overflow), listRInputBuffer/2)
-			wg.Add(l)
-			for _, d := range overflow[:l] {
-				in <- d
+			if !refillListRInput(&mu, &in, &overflow, &wg) {
+				return
 			}
-			overflow = overflow[l:]
-			mu.Unlock()
 
 			// wait again for the completion of all directories
 			wg.Wait()
@@ -3052,6 +2941,25 @@ func (f *Fs) ListR(ctx context.Context, dir string, callback fs.ListRCallback) (
 	}
 
 	return nil
+}
+
+// refillListRInput moves queued directory jobs back onto in.
+// It returns false when a listing error has already closed in.
+// Sending on that nil channel would block forever while holding mu.
+func refillListRInput(mu *sync.Mutex, in *chan listREntry, overflow *[]listREntry, wg *sync.WaitGroup) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	if *in == nil {
+		return false
+	}
+	// only fill half of the channel to prevent entries being put into overflow again
+	l := min(len(*overflow), listRInputBuffer/2)
+	wg.Add(l)
+	for _, d := range (*overflow)[:l] {
+		*in <- d
+	}
+	*overflow = (*overflow)[l:]
+	return true
 }
 
 const shortcutSeparator = '\t'
@@ -4107,6 +4015,14 @@ func (f *Fs) changeChunkSize(chunkSizeString string) (err error) {
 
 func (f *Fs) changeServiceAccountFile(ctx context.Context, file string) (err error) {
 	fs.Debugf(nil, "Changing Service Account File from %s to %s", f.opt.ServiceAccountFile, file)
+	if f.rotator != nil && f.rotator.kind == "service account" {
+		if err := f.rotator.switchTo(ctx, file); err != nil {
+			return err
+		}
+		f.opt.ServiceAccountFile = file
+		f.opt.ServiceAccountCredentials = ""
+		return nil
+	}
 	if file == f.opt.ServiceAccountFile {
 		return nil
 	}
@@ -4141,10 +4057,6 @@ func (f *Fs) changeServiceAccountFile(ctx context.Context, file string) (err err
 		if err != nil {
 			return fmt.Errorf("couldn't create Drive v2 client: %w", err)
 		}
-	}
-	if f.saPool != nil {
-		f.saPool.add(file)
-		f.saPool.markCooldown(file, time.Time{})
 	}
 	return nil
 }
@@ -4722,6 +4634,25 @@ Third delete all orphaned files to the trash:
 ` + "```console" + `
 rclone backend rescue drive: -o delete
 ` + "```",
+}, {
+	Name:  "direct",
+	Short: "Show or refresh the Google IPs used by direct mode.",
+	Long: `This command shows the cached probe results for direct mode (the
+direct option): every candidate IP, its latency and the last error.
+
+Usage examples:
+
+` + "```console" + `
+rclone backend direct drive:
+rclone backend direct drive: -o scan
+rclone backend direct drive: -o scan --drive-direct-ips 142.250.1.1,142.250.1.2
+` + "```" + `
+
+With -o scan it probes the candidates now and saves the result, even if
+direct mode is off, so you can check which IPs work before enabling it.`,
+	Opts: map[string]string{
+		"scan": "Probe the candidate IPs now",
+	},
 }}
 
 // Command the backend to run a named command
@@ -4849,6 +4780,8 @@ func (f *Fs) Command(ctx context.Context, name string, arg []string, opt map[str
 			return results, nil
 		}
 		return nil, errors.New("need a query argument")
+	case "direct":
+		return f.directCommand(ctx, opt)
 	case "rescue":
 		dirID := ""
 		_, delete := opt["delete"]

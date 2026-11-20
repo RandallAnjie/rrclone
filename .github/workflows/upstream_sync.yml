@@ -1,0 +1,168 @@
+---
+# Weekly merge of rclone/master into the rrclone fork.
+#
+# A clean merge is pushed to the sync/upstream-auto branch and opened
+# (or updated) as a PR against master for review. A conflicting merge
+# opens (or updates) an issue listing the conflicted files instead.
+#
+# Set the SYNC_TOKEN secret to a personal access token with Contents,
+# Pull requests, Issues and Workflows read/write on this repo. Without
+# it the built-in token is used, which GitHub doesn't allow to push
+# changes to .github/workflows or to trigger CI on the PR it opens.
+
+name: upstream-sync
+
+on:
+  schedule:
+    # Mondays 02:00 UTC (10:00 Beijing)
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  BRANCH: sync/upstream-auto
+  BASE: master
+  UPSTREAM: https://github.com/rclone/rclone.git
+  CONFLICT_LABEL: upstream-sync
+  GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
+  HAVE_SYNC_TOKEN: ${{ secrets.SYNC_TOKEN != '' }}
+
+jobs:
+  sync:
+    if: github.repository != 'rclone/rclone'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.BASE }}
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - name: Merge upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "$UPSTREAM"
+          git fetch --no-tags upstream master
+
+          # Issue helpers: one open issue per label, updated by comments
+          gh label create "$CONFLICT_LABEL" --color FBCA04 --description "Automatic upstream sync needs attention" 2>/dev/null || true
+          report() { # title, body
+            local num
+            num=$(gh issue list --label "$CONFLICT_LABEL" --state open --json number -q '.[0].number')
+            if [ -n "$num" ]; then
+              gh issue comment "$num" --body "$2"
+            else
+              gh issue create --title "$1" --label "$CONFLICT_LABEL" --body "$2"
+            fi
+          }
+          resolved() {
+            local num
+            num=$(gh issue list --label "$CONFLICT_LABEL" --state open --json number -q '.[0].number')
+            if [ -n "$num" ]; then
+              gh issue close "$num" --comment "$1"
+            fi
+          }
+
+          behind=$(git rev-list --count HEAD..upstream/master)
+          echo "$BASE is $behind commits behind rclone/master" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$behind" -eq 0 ]; then
+            resolved "$BASE is up to date with rclone/master."
+            exit 0
+          fi
+
+          # Keep building on an open sync PR so fixes pushed to it survive
+          pr=$(gh pr list --head "$BRANCH" --base "$BASE" --state open --json number -q '.[0].number')
+          if [ -n "$pr" ] && git fetch --no-tags origin "$BRANCH"; then
+            git switch -C "$BRANCH" "origin/$BRANCH"
+            behind=$(git rev-list --count HEAD..upstream/master)
+            if [ "$behind" -eq 0 ]; then
+              echo "PR #$pr already contains rclone/master" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            push=(git push origin "$BRANCH")
+          else
+            git switch -C "$BRANCH"
+            push=(git push --force origin "$BRANCH")
+          fi
+          upstream_sha=$(git rev-parse --short upstream/master)
+
+          if ! git merge --no-ff --no-edit -m "Merge official rclone/master into rrclone" upstream/master; then
+            files=$(git diff --name-only --diff-filter=U | sed 's/^/- `/; s/$/`/')
+            git merge --abort
+            echo "Merge conflicts:" >> "$GITHUB_STEP_SUMMARY"
+            echo "$files" >> "$GITHUB_STEP_SUMMARY"
+            report "Upstream sync: merge conflicts" "$(cat <<EOF
+          Merging rclone/master (\`$upstream_sha\`, $behind commits) into \`$(git rev-parse --abbrev-ref HEAD)\` conflicts in:
+
+          $files
+
+          Resolve locally:
+
+          \`\`\`bash
+          git fetch origin && git fetch upstream master
+          git switch $BRANCH 2>/dev/null || git switch -c $BRANCH origin/$BASE
+          git merge upstream/master
+          # fix the files above, go build ./... && go test ./...
+          git commit
+          git push -u origin $BRANCH
+          \`\`\`
+
+          Then open a PR from \`$BRANCH\` into \`$BASE\`. The next run updates that PR instead of starting over.
+
+          Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          EOF
+          )"
+            exit 0
+          fi
+
+          if ! "${push[@]}"; then
+            report "Upstream sync: push failed" "$(cat <<EOF
+          The merge of rclone/master (\`$upstream_sha\`) was clean but pushing \`$BRANCH\` failed.
+
+          If the merge changes files under \`.github/workflows\`, GitHub refuses that push from the built-in token. Add a \`SYNC_TOKEN\` secret (a personal access token with Contents, Pull requests, Issues and Workflows read/write on this repo) and run the workflow again.
+
+          Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          EOF
+          )"
+            exit 1
+          fi
+
+          body="$(cat <<EOF
+          Automatic merge of rclone/master (\`$upstream_sha\`, $behind new commits) into \`$BASE\`. It merged without conflicts; review CI before merging.
+
+          Use a merge commit (not squash) so the next sync only brings new commits.
+          EOF
+          )"
+          if [ -n "$pr" ]; then
+            gh pr comment "$pr" --body "Merged $behind more commits from rclone/master (\`$upstream_sha\`)."
+          elif ! pr_url=$(gh pr create --base "$BASE" --head "$BRANCH" --title "Sync rclone/master" --body "$body"); then
+            report "Upstream sync: couldn't open the PR" "$(cat <<EOF
+          \`$BRANCH\` was pushed but opening the PR failed. Either open it by hand, or allow it: Settings, Actions, General, "Allow GitHub Actions to create and approve pull requests" (or add a \`SYNC_TOKEN\` secret).
+
+          Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          EOF
+          )"
+            exit 1
+          else
+            echo "Opened $pr_url" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # Pushes and PRs made with the built-in token don't trigger CI
+          if [ "$HAVE_SYNC_TOKEN" != "true" ]; then
+            gh workflow run rrclone_ci.yml --ref "$BRANCH"
+          fi
+          resolved "rclone/master (\`$upstream_sha\`) merged cleanly into \`$BRANCH\`."

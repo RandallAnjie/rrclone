@@ -3,7 +3,6 @@
 package flags
 
 import (
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -142,7 +141,7 @@ func installFlag(flags *pflag.FlagSet, name string, groupsString string) {
 
 	// Read default from environment if possible
 	envKey := fs.OptionToEnv(name)
-	if envValue, envFound := os.LookupEnv(envKey); envFound {
+	if envValue, envFound := fs.LookupEnv(envKey); envFound {
 		isStringArray := false
 		opt, isOption := flag.Value.(*fs.Option)
 		if isOption {

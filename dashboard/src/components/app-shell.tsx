@@ -15,6 +15,7 @@ import {
   MountsIcon,
   OverviewIcon,
   RemotesIcon,
+  RotationIcon,
   TransfersIcon,
 } from "./icons";
 
@@ -24,6 +25,7 @@ const NAV = [
   { href: "/remotes", label: "远程", icon: RemotesIcon },
   { href: "/jobs", label: "任务", icon: JobsIcon },
   { href: "/mounts", label: "挂载", icon: MountsIcon },
+  { href: "/rotation", label: "账号轮换", icon: RotationIcon },
   { href: "/hosts", label: "主机", icon: HostsIcon },
 ] as const;
 

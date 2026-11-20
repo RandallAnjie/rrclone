@@ -555,6 +555,10 @@ func (f *Fs) Copy(ctx context.Context, src fs.Object, remote string) (fs.Object,
 		return nil, fs.ErrorCantCopy
 	}
 	if err := f.relocate(ctx, srcObj.fs.absPath(srcObj.remote), f.absPath(remote), true); err != nil {
+		// Copies use ondup=fail, so rclone uploads a new version instead
+		if errno(err) == api.ErrnoExist {
+			return nil, fs.ErrorCantCopy
+		}
 		return nil, err
 	}
 	return f.NewObject(ctx, remote)

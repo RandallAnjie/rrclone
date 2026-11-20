@@ -1,0 +1,62 @@
+---
+# Test, lint and build the RC dashboard.
+#
+# @heroui-pro/react is a placeholder on npm. Its postinstall downloads the
+# real components with the HEROUI_AUTH_TOKEN secret, so without the secret
+# (pull requests from forks) only the tests and lint run.
+
+name: dashboard
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'dashboard/**'
+      - '.github/workflows/dashboard.yml'
+  pull_request:
+    paths:
+      - 'dashboard/**'
+      - '.github/workflows/dashboard.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dashboard:
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    env:
+      HEROUI_AUTH_TOKEN: ${{ secrets.HEROUI_AUTH_TOKEN }}
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Lint
+        run: npx eslint
+
+      - name: Build
+        if: env.HEROUI_AUTH_TOKEN != ''
+        run: npm run build

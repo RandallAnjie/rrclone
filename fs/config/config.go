@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mitchellh/go-homedir"
@@ -120,7 +121,9 @@ var (
 	configPath string
 	cacheDir   string
 	data       Storage
-	dataLoaded bool
+
+	dataLoadedMu sync.Mutex
+	dataLoaded   bool
 )
 
 func init() {
@@ -346,6 +349,9 @@ func SetConfigPath(path string) (err error) {
 // SetData sets new config file storage
 func SetData(newData Storage) {
 	// If no config file, use in-memory config (which is the default)
+	dataLoadedMu.Lock()
+	defer dataLoadedMu.Unlock()
+
 	if configPath == "" {
 		return
 	}
@@ -363,6 +369,10 @@ var ErrorConfigFileNotFound = errors.New("config file not found")
 
 // LoadedData ensures the config file storage is loaded and returns it
 func LoadedData() Storage {
+
+	dataLoadedMu.Lock()
+	defer dataLoadedMu.Unlock()
+
 	if !dataLoaded {
 		// Set RRCLONE_CONFIG_DIR for backend config and subprocesses
 		// If empty configPath (in-memory only) the value will be "."
@@ -608,6 +618,12 @@ func updateRemote(ctx context.Context, name string, keyValues rc.Params, opt Upd
 			m.Set(k, vStr)
 		} else {
 			ephemeral.Set(k, vStr)
+		}
+	}
+	// A token passed in is the one to keep, so don't offer to replace it
+	if _, ok := keyValues[ConfigToken]; ok {
+		if _, ok := choices.Get("config_refresh_token"); !ok {
+			choices.Set("config_refresh_token", "false")
 		}
 	}
 	// Add a getter to make sure ephemeral config is still visible

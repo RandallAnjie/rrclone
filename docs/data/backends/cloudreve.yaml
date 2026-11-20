@@ -1,0 +1,24 @@
+backend: "cloudreve"
+name: Cloudreve
+tier: Tier 3
+maintainers: External
+features_score: 4
+integration_tests: Unknown
+data_integrity: Other
+performance: Medium
+adoption: Some use
+docs: Full
+security: High
+virtual: false
+remote: 'TestCloudreve:'
+features:
+- About
+- CanHaveEmptyDirectories
+- Copy
+- DirMove
+- ListP
+- Move
+- PublicLink
+- Purge
+hashes: []
+precision: 1000000000

@@ -16,20 +16,31 @@ import (
 //	rclone authorize "backend name" "base64 encoded JSON blob"
 //	rclone authorize "backend name" "client id" "client secret"
 func Authorize(ctx context.Context, args []string, noAutoBrowser bool, templateFile string) error {
+	out, err := AuthorizeToken(ctx, args, noAutoBrowser, templateFile)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Paste the following into your remote machine --->\n%s\n<---End paste\n", out)
+	return nil
+}
+
+// AuthorizeToken runs the authorization of Authorize and returns what
+// Authorize prints: the token JSON, or a config blob if args has one.
+func AuthorizeToken(ctx context.Context, args []string, noAutoBrowser bool, templateFile string) (string, error) {
 	ctx = suppressConfirm(ctx)
 	ctx = fs.ConfigOAuthOnly(ctx)
 	switch len(args) {
 	case 1, 2, 3:
 	default:
-		return fmt.Errorf("invalid number of arguments: %d", len(args))
+		return "", fmt.Errorf("invalid number of arguments: %d", len(args))
 	}
 	Type := args[0] // FIXME could read this from input
 	ri, err := fs.Find(Type)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if ri.Config == nil {
-		return fmt.Errorf("can't authorize fs %q", Type)
+		return "", fmt.Errorf("can't authorize fs %q", Type)
 	}
 
 	// Config map for remote
@@ -50,7 +61,7 @@ func Authorize(ctx context.Context, args []string, noAutoBrowser bool, templateF
 	if len(args) == 2 {
 		err := inM.Decode(args[1])
 		if err != nil {
-			return err
+			return "", err
 		}
 	} else if len(args) == 3 {
 		inM[ConfigClientID] = args[1]
@@ -68,20 +79,18 @@ func Authorize(ctx context.Context, args []string, noAutoBrowser bool, templateF
 
 	err = PostConfig(ctx, name, m, ri)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	// Print the code for the user to paste
+	// The code for the user to paste
 	out := outM["token"]
 
 	// If received a config blob, then return one
 	if len(args) == 2 {
 		out, err = outM.Encode()
 		if err != nil {
-			return err
+			return "", err
 		}
 	}
-	fmt.Printf("Paste the following into your remote machine --->\n%s\n<---End paste\n", out)
-
-	return nil
+	return out, nil
 }

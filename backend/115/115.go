@@ -314,6 +314,18 @@ func errorHandler(resp *http.Response) error {
 	return fmt.Errorf("HTTP error %v (%v) returned body: %q", resp.StatusCode, resp.Status, body)
 }
 
+// clientWithUA makes an HTTP client which sends the User-Agent ua.
+//
+// fshttp sets the User-Agent of every request from the config, which
+// replaces one set on the request, so the agent goes in the config of
+// the client. 115 ties download links to the agent which asked for
+// them, so API calls and downloads must share one.
+func clientWithUA(ctx context.Context, ua string) *http.Client {
+	ctx, ci := fs.AddConfig(ctx)
+	ci.UserAgent = ua
+	return fshttp.NewClient(ctx)
+}
+
 // NewFs constructs an Fs from the path, container:path
 func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, error) {
 	opt := new(Options)
@@ -342,7 +354,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		opt.PacerMinSleep = fs.Duration(defaultMinSleep)
 	}
 	root = parsePath(root)
-	client := fshttp.NewClient(ctx)
+	client := clientWithUA(ctx, opt.UserAgent)
 	rootFolderID := opt.RootFolderID
 	if rootFolderID == "" {
 		rootFolderID = rootID
@@ -353,17 +365,14 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		opt:    *opt,
 		srv:    rest.NewClient(client).SetRoot(strings.TrimRight(opt.Endpoint, "/")),
 		dl:     rest.NewClient(client),
-		oss:    rest.NewClient(client),
+		oss:    rest.NewClient(clientWithUA(ctx, ossUserAgent)),
 		pacer:  fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(time.Duration(opt.PacerMinSleep)), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
 		upload: &uploadState{},
 	}
 	f.srv.SetErrorHandler(errorHandler)
-	f.srv.SetHeader("User-Agent", opt.UserAgent)
 	f.srv.SetHeader("Referer", "https://115.com/")
 	f.srv.SetHeader("Cookie", cookieHeader(uid, cid, seid, kid))
-	f.dl.SetHeader("User-Agent", opt.UserAgent)
 	f.dl.SetHeader("Cookie", cookieHeader(uid, cid, seid, kid))
-	f.oss.SetHeader("User-Agent", ossUserAgent)
 	f.features = (&fs.Features{
 		CaseInsensitive:         false,
 		CanHaveEmptyDirectories: true,

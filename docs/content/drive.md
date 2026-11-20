@@ -370,6 +370,17 @@ client ID, client secret, and token all change together.
 
 Both formats can be mixed freely within the same `oauth_account_files` list.
 
+`rclone rc rotation/status` and the dashboard show the account in use
+and which accounts are cooling down, for both service account and
+OAuth account rotation.
+
+The easiest way to make a structured file is to authorise in the
+browser and let rclone write it (run it again to renew an account):
+
+```
+rclone authorize drive YOUR_CLIENT_ID YOUR_CLIENT_SECRET --account-file /path/to/tokens/account1.json
+```
+
 Example config using the structured format:
 
 ```
@@ -1363,7 +1374,7 @@ recommended usage is using the flag form --drive-size-as-quota when
 doing rclone ls/lsl/lsf/lsjson/etc only.
 
 If you do use this flag for syncing (not recommended) then you will
-need to use --ignore size also.
+need to use --ignore-size also.
 
 Properties:
 
@@ -2293,6 +2304,15 @@ Scroll down and click "+ Add users". Add yourself as a test user and press save.
 
 9. Go to "Audience" and then click "PUBLISH APP" button and confirm.
    Add yourself as a test user if you haven't already.
+
+    (If the "PUBLISH APP" button is greyed out, Google now requires a
+    homepage URL and a privacy policy URL before publishing, even for a
+    personal single-user app. Go to "Branding" in the left panel, fill in
+    "Application home page" and "Application privacy policy link" - a free
+    GitHub Pages site is fine for these if you don't have a domain of your
+    own - then "Authorized domains" with the domain you used, and click
+    Save. Return to "Audience" and the "PUBLISH APP" button should now be
+    available.)
 
 10. Provide the noted client ID and client secret to rclone.
 

@@ -30,11 +30,25 @@ Rclone *("rsync for cloud storage")* 是一个用于在各种云存储之间同�
 
 - **自定义 API**：Drive / Dropbox / Photos / Box / OneDrive 可把官方 API 主机换成反代。Drive 要换三个地址（授权、token、API）
 - **115 网盘**：浏览器 cookie + web API
+- **阿里云盘**：官方开放平台 API，授权码 / refresh token 登录（自动保存轮换的 token）、SHA1 哈希、原生移动（同时改名）和复制、上传地址过期自动续、默认盘 / 资源库可选
+- **百度网盘**：官方开放平台（xpan）API，OAuth 登录、分块上传、秒传、原生服务端复制 / 移动（同时改名）、保留修改时间、可配反代地址
+- **123 云盘**：官方开放平台 API（开发者 client_id / secret），MD5 哈希、秒传、靠秒传实现的服务端复制、按接口 QPS 限速
+- **OpenList / AList**：原生 API 接入，一个后端访问 OpenList 里挂载的所有网盘（天翼、夸克、移动、迅雷、阿里、百度……）；支持哈希、元数据密码、跨存储复制 / 移动（等待后台任务）
+- **Cloudreve v4**（社区版 + Pro）：密码 / 2FA / OAuth（支持 OIDC 单点登录）登录，分享链接只读访问，Pro 多存储策略选择，按存储策略直传（本机 / 从机 / OneDrive / S3 / KS3 / OSS / COS / OBS / 七牛）和 AES-256-CTR 客户端加密
 - **Google Drive 多 OAuth 账号轮换**：`--drive-oauth-account-files`
+- **OneDrive 多 OAuth 账号 / 应用轮换**：`--onedrive-oauth-account-files`，429 限流 / token 失效自动切号
+- **Dropbox 多 OAuth 账号 / App Key 轮换**：`--dropbox-oauth-account-files`，限流自动切号
 - **rclone 状态看板**：独立的 `dashboard/` Next.js 应用
 - **一键安装**、默认配置 `~/.config/rrclone/rrclone.conf`
 
-Google Drive 多账号轮换的细节仍在 Drive 文档的 **“OAuth account rotation”** 章节。看板启动方式见 [dashboard/README.md](dashboard/README.md)。
+账号文件可以用 `rclone authorize <后端> <client_id> <client_secret> --account-file 文件.json` 直接生成。Google Drive / Dropbox 多账号轮换的细节分别在 Drive、Dropbox 文档的 **“OAuth account rotation”** 章节。看板启动方式见 [dashboard/README.md](dashboard/README.md)。
+
+### 维护：CI 与上游同步
+
+- `.github/workflows/rrclone_ci.yml`：官方 `build.yml` 只在 rclone/rclone 里跑，本分支用它在 Linux / Windows / macOS 跑单测，对 fork 自己的包跑 `-race`，再跑 golangci-lint。
+- `.github/workflows/upstream_sync.yml`：每周一 10:00（北京时间）把 rclone/master 合到 `sync/upstream-auto` 分支。合并干净就开 / 更新一个 PR 等你审；有冲突就开一个 `upstream-sync` 标签的 issue，列出冲突文件和本地解决步骤。也可以在 Actions 页面手动运行。
+- 建议在仓库 Secrets 里加 `SYNC_TOKEN`：一个只授权本仓库的 fine-grained token，Contents、Pull requests、Issues、Workflows 都给读写。没有它时用内置 token，但 GitHub 不允许内置 token 推送改动了 `.github/workflows` 的合并，也不会给它开的 PR 自动跑 CI（脚本会改用手动触发 CI），开 PR 还需要打开 Settings → Actions → General → “Allow GitHub Actions to create and approve pull requests”。
+- 合并同步 PR 时用 merge commit，不要 squash，否则下次同步会把同一批上游提交再带一遍。
 
 ## 安装（从官方 rclone 一键切到 rrclone）
 
@@ -65,22 +79,31 @@ Windows 没有 bash 一键脚本，请从 [Releases](https://github.com/RandallA
 ## Storage providers
 
 - 115 Drive [:page_facing_up:](https://rclone.org/115/)
+- 123 Pan [:page_facing_up:](https://rclone.org/123pan/)
+- Aliyun Drive [:page_facing_up:](https://rclone.org/aliyundrive/)
+- Baidu Netdisk [:page_facing_up:](https://rclone.org/baidu/)
+- Cloudreve [:page_facing_up:](https://rclone.org/cloudreve/)
+- OpenList / AList [:page_facing_up:](https://rclone.org/openlist/)
 - 1Fichier [:page_facing_up:](https://rclone.org/fichier/)
+- Abrha Storage [:page_facing_up:](https://rclone.org/s3/#abrhastorage)
 - Akamai Netstorage [:page_facing_up:](https://rclone.org/netstorage/)
 - Alibaba Cloud (Aliyun) Object Storage System (OSS) [:page_facing_up:](https://rclone.org/s3/#alibaba-oss)
 - Amazon S3 [:page_facing_up:](https://rclone.org/s3/)
 - ArvanCloud Object Storage (AOS) [:page_facing_up:](https://rclone.org/s3/#arvan-cloud-object-storage-aos)
+- Autonomys Auto Drive [:page_facing_up:](https://rclone.org/s3/#autonomys)
 - Bizfly Cloud Simple Storage [:page_facing_up:](https://rclone.org/s3/#bizflycloud)
 - Backblaze B2 [:page_facing_up:](https://rclone.org/b2/)
 - Box [:page_facing_up:](https://rclone.org/box/)
 - Ceph [:page_facing_up:](https://rclone.org/s3/#ceph)
 - China Mobile Ecloud Elastic Object Storage (EOS) [:page_facing_up:](https://rclone.org/s3/#china-mobile-ecloud-eos)
 - Citrix ShareFile [:page_facing_up:](https://rclone.org/sharefile/)
+- Clever Cloud Cellar [:page_facing_up:](https://rclone.org/s3/#clever-cloud-cellar)
 - Cloudflare R2 [:page_facing_up:](https://rclone.org/s3/#cloudflare-r2)
 - Cloudinary [:page_facing_up:](https://rclone.org/cloudinary/)
 - Cubbit DS3 [:page_facing_up:](https://rclone.org/s3/#Cubbit)
 - DigitalOcean Spaces [:page_facing_up:](https://rclone.org/s3/#digitalocean-spaces)
 - Digi Storage [:page_facing_up:](https://rclone.org/koofr/#digi-storage)
+- dosya.dev [:page_facing_up:](https://rclone.org/dosya/)
 - Dreamhost [:page_facing_up:](https://rclone.org/s3/#dreamhost)
 - Drime [:page_facing_up:](https://rclone.org/s3/#drime)
 - Dropbox [:page_facing_up:](https://rclone.org/dropbox/)
@@ -112,8 +135,11 @@ Windows 没有 bash 一键脚本，请从 [Releases](https://github.com/RandallA
 - Jottacloud [:page_facing_up:](https://rclone.org/jottacloud/)
 - IBM COS S3 [:page_facing_up:](https://rclone.org/s3/#ibm-cos-s3)
 - Impossible Cloud [:page_facing_up:](https://rclone.org/s3/#impossible-cloud)
+- Infomaniak Swiss Backup (S3) [:page_facing_up:](https://rclone.org/s3/#infomaniak)
+- Infomaniak Swiss Backup (Swift) [:page_facing_up:](https://rclone.org/swift/)
 - Intercolo Object Storage [:page_facing_up:](https://rclone.org/s3/#intercolo)
 - IONOS Cloud [:page_facing_up:](https://rclone.org/s3/#ionos)
+- kDrive [:page_facing_up:](https://rclone.org/kdrive/)
 - Koofr [:page_facing_up:](https://rclone.org/koofr/)
 - Leviia Object Storage [:page_facing_up:](https://rclone.org/s3/#leviia)
 - Liara Object Storage [:page_facing_up:](https://rclone.org/s3/#liara-object-storage)
@@ -129,6 +155,7 @@ Windows 没有 bash 一键脚本，请从 [Releases](https://github.com/RandallA
 - Microsoft Azure Files Storage [:page_facing_up:](https://rclone.org/azurefiles/)
 - Microsoft OneDrive [:page_facing_up:](https://rclone.org/onedrive/)
 - Minio [:page_facing_up:](https://rclone.org/s3/#minio)
+- Neon Object Storage [:page_facing_up:](https://rclone.org/s3/#neon)
 - Nextcloud [:page_facing_up:](https://rclone.org/webdav/#nextcloud)
 - Blomp Cloud Storage [:page_facing_up:](https://rclone.org/swift/)
 - OpenDrive [:page_facing_up:](https://rclone.org/opendrive/)
@@ -152,6 +179,7 @@ Windows 没有 bash 一键脚本，请从 [Releases](https://github.com/RandallA
 - Quatrix [:page_facing_up:](https://rclone.org/quatrix/)
 - Rackspace Cloud Files [:page_facing_up:](https://rclone.org/swift/)
 - RackCorp Object Storage [:page_facing_up:](https://rclone.org/s3/#RackCorp)
+- RelAix.Storage [:page_facing_up:](https://rclone.org/s3/#relaix)
 - rsync.net [:page_facing_up:](https://rclone.org/sftp/#rsync-net)
 - Scaleway [:page_facing_up:](https://rclone.org/s3/#scaleway)
 - Scality (RING / ARTESCA) [:page_facing_up:](https://rclone.org/s3/#scality)

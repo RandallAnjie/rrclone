@@ -72,6 +72,7 @@ func (n *FlexInt64) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Int64 returns n as an int64
 func (n FlexInt64) Int64() int64 { return int64(n) }
 
 // BaseResponse is the common envelope for webapi.115.com JSON.

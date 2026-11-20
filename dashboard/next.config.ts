@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   transpilePackages: ["@heroui-pro/react"],
-  // Local verification uses http://127.0.0.1:3000 against a 0.0.0.0 bind.
+  // The dev server binds 127.0.0.1 (see package.json); allow both loopback names.
   allowedDevOrigins: ["127.0.0.1", "localhost"],
 };
 

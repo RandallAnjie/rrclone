@@ -434,7 +434,7 @@ func FileDeleteKey(section, key string) bool {
 // configmap, which means environment variables before config file.
 func GetValue(remote, key string) string {
 	envKey := fs.ConfigToEnv(remote, key)
-	value, found := os.LookupEnv(envKey)
+	value, found := fs.LookupEnv(envKey)
 	if found {
 		return value
 	}
@@ -461,7 +461,7 @@ type Remote struct {
 	Description string `json:"description"`
 }
 
-var remoteEnvRe = regexp.MustCompile(`^(?:RRCLONE|RCLONE)_CONFIG_(.+?)_TYPE=(.+)$`)
+var remoteEnvRe = regexp.MustCompile(`^(RRCLONE|RCLONE)_CONFIG_(.+?)_TYPE=(.+)$`)
 
 // GetRemotes returns the list of remotes defined in environment and config file.
 //
@@ -469,14 +469,24 @@ var remoteEnvRe = regexp.MustCompile(`^(?:RRCLONE|RCLONE)_CONFIG_(.+?)_TYPE=(.+)
 // configmap, which means environment variables before config file.
 func GetRemotes() []Remote {
 	var remotes []Remote
+	envIndex := map[string]int{}
 	for _, item := range os.Environ() {
 		matches := remoteEnvRe.FindStringSubmatch(item)
-		if len(matches) == 3 {
-			remotes = append(remotes, Remote{
-				Name:   strings.ToLower(matches[1]),
-				Type:   strings.ToLower(matches[2]),
+		if len(matches) == 4 {
+			remote := Remote{
+				Name:   strings.ToLower(matches[2]),
+				Type:   strings.ToLower(matches[3]),
 				Source: "environment",
-			})
+			}
+			// RRCLONE_CONFIG_* takes precedence over RCLONE_CONFIG_*
+			if i, ok := envIndex[remote.Name]; ok {
+				if matches[1] == "RRCLONE" {
+					remotes[i] = remote
+				}
+				continue
+			}
+			envIndex[remote.Name] = len(remotes)
+			remotes = append(remotes, remote)
 		}
 	}
 	remoteExists := func(name string) bool {

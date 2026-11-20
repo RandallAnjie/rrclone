@@ -92,7 +92,7 @@ func (f *Fs) findItem(ctx context.Context, dir string) (item *api.DriveItem, fou
 		item, resp, err = f.service.GetItemByPath(ctx, path.Join(f.root, dir))
 		return shouldRetry(ctx, resp, err)
 	}); err != nil {
-		if item == nil && resp.StatusCode == 404 {
+		if item == nil && resp != nil && resp.StatusCode == 404 {
 			return nil, false, nil
 		}
 		return nil, false, err
@@ -694,6 +694,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		pacer:  fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(minSleep), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
 	}
 	f.features = (&fs.Features{
+		CaseInsensitive:         true, // names are matched with EqualFold, see findLeafItem
 		CanHaveEmptyDirectories: true,
 		PartialUploads:          false,
 	}).Fill(ctx, f)

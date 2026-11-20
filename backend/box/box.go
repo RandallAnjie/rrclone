@@ -27,7 +27,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/golang-jwt/jwt/v4"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/rclone/rclone/backend/box/api"
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config"
@@ -63,6 +63,35 @@ const (
 	tokenURL                    = "https://api.box.com/oauth2/token"
 )
 
+func boxAPIRoot(endpoint string) string {
+	if endpoint == "" {
+		return rootURL
+	}
+	root := rest.CanonicalRoot(endpoint)
+	if strings.HasSuffix(root, "/2.0") {
+		return root
+	}
+	return root + "/2.0"
+}
+
+func boxUploadRoot(endpoint string) string {
+	if endpoint == "" {
+		return uploadURL
+	}
+	root := rest.CanonicalRoot(endpoint)
+	if strings.HasSuffix(root, "/2.0") {
+		return root
+	}
+	return root + "/api/2.0"
+}
+
+func (f *Fs) uploadAPI() string {
+	if f.uploadRoot != "" {
+		return f.uploadRoot
+	}
+	return uploadURL
+}
+
 // Globals
 var (
 	// Description of how to auth for this app
@@ -77,7 +106,10 @@ var (
 )
 
 type boxCustomClaims struct {
-	jwt.StandardClaims
+	jwt.RegisteredClaims
+	// Audience overrides RegisteredClaims.Audience so it is sent as
+	// a single string rather than an array of strings
+	Audience   string `json:"aud,omitempty"`
 	BoxSubType string `json:"box_sub_type,omitempty"`
 }
 
@@ -170,6 +202,38 @@ See: https://developer.box.com/guides/authentication/jwt/as-user/
 			Advanced:  true,
 			Sensitive: true,
 		}, {
+			Name: "endpoint",
+			Help: `Custom endpoint for the Box API. Leave blank to use the provider default.
+
+This should reverse-proxy https://api.box.com, including the /2.0 path
+prefix. Uploads use upload_endpoint (https://upload.box.com/api/2.0).
+
+If OAuth is also blocked, set auth_url and token_url to the matching
+proxies of https://app.box.com/api/oauth2/authorize and
+https://app.box.com/api/oauth2/token.`,
+			Advanced: true,
+			Examples: []fs.OptionExample{{
+				Value: "https://api.box.com/2.0",
+				Help:  "Box API (default)",
+			}, {
+				Value: "https://api.box.example.com",
+				Help:  "Reverse proxy for api.box.com",
+			}},
+		}, {
+			Name: "upload_endpoint",
+			Help: `Custom endpoint for the Box upload API. Leave blank to use the provider default.
+
+This should reverse-proxy https://upload.box.com, including the /api/2.0
+path prefix.`,
+			Advanced: true,
+			Examples: []fs.OptionExample{{
+				Value: "https://upload.box.com/api/2.0",
+				Help:  "Box upload API (default)",
+			}, {
+				Value: "https://upload.box.example.com",
+				Help:  "Reverse proxy for upload.box.com",
+			}},
+		}, {
 			Name:     config.ConfigEncoding,
 			Help:     config.ConfigEncodingHelp,
 			Advanced: true,
@@ -223,7 +287,7 @@ func getBoxConfig(m configmap.Mapper) (boxConfig *api.ConfigJSON, err error) {
 
 	if configFileCredentials == "" {
 		configFile, _ := m.Get("box_config_file")
-		configFileBytes, err = os.ReadFile(configFile)
+		configFileBytes, err = os.ReadFile(env.ShellExpand(configFile))
 		if err != nil {
 			return nil, fmt.Errorf("box: failed to read Box config: %w", err)
 		}
@@ -243,15 +307,13 @@ func getClaims(boxConfig *api.ConfigJSON, boxSubType string) (claims *boxCustomC
 	}
 
 	claims = &boxCustomClaims{
-		//lint:ignore SA1019 since we need to use jwt.StandardClaims even if deprecated in jwt-go v4 until a more permanent solution is ready in time before jwt-go v5 where it is removed entirely
-		//nolint:staticcheck // Don't include staticcheck when running golangci-lint to avoid SA1019
-		StandardClaims: jwt.StandardClaims{
-			Id:        val,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        val,
 			Issuer:    boxConfig.BoxAppSettings.ClientID,
 			Subject:   boxConfig.EnterpriseID,
-			Audience:  tokenURL,
-			ExpiresAt: time.Now().Add(time.Second * 45).Unix(),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Second * 45)),
 		},
+		Audience:   tokenURL,
 		BoxSubType: boxSubType,
 	}
 	return claims, nil
@@ -292,14 +354,16 @@ func getDecryptedPrivateKey(boxConfig *api.ConfigJSON) (key *rsa.PrivateKey, err
 
 // Options defines the configuration for this backend
 type Options struct {
-	UploadCutoff  fs.SizeSuffix        `config:"upload_cutoff"`
-	CommitRetries int                  `config:"commit_retries"`
-	Enc           encoder.MultiEncoder `config:"encoding"`
-	RootFolderID  string               `config:"root_folder_id"`
-	AccessToken   string               `config:"access_token"`
-	ListChunk     int                  `config:"list_chunk"`
-	OwnedBy       string               `config:"owned_by"`
-	Impersonate   string               `config:"impersonate"`
+	UploadCutoff   fs.SizeSuffix        `config:"upload_cutoff"`
+	CommitRetries  int                  `config:"commit_retries"`
+	Enc            encoder.MultiEncoder `config:"encoding"`
+	RootFolderID   string               `config:"root_folder_id"`
+	AccessToken    string               `config:"access_token"`
+	ListChunk      int                  `config:"list_chunk"`
+	OwnedBy        string               `config:"owned_by"`
+	Impersonate    string               `config:"impersonate"`
+	Endpoint       string               `config:"endpoint"`
+	UploadEndpoint string               `config:"upload_endpoint"`
 }
 
 // ItemMeta defines metadata we cache for each Item ID
@@ -322,6 +386,7 @@ type Fs struct {
 	uploadToken     *pacer.TokenDispenser // control concurrency
 	itemMetaCacheMu *sync.Mutex           // protects itemMetaCache
 	itemMetaCache   map[string]ItemMeta   // map of Item ID to selected metadata
+	uploadRoot      string                // Box upload API root
 }
 
 // Object describes a box object
@@ -482,11 +547,12 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		name:            name,
 		root:            root,
 		opt:             *opt,
-		srv:             rest.NewClient(client).SetRoot(rootURL),
+		srv:             rest.NewClient(client).SetRoot(boxAPIRoot(opt.Endpoint)),
 		pacer:           fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(minSleep), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
 		uploadToken:     pacer.NewTokenDispenser(ci.Transfers),
 		itemMetaCacheMu: new(sync.Mutex),
 		itemMetaCache:   make(map[string]ItemMeta),
+		uploadRoot:      boxUploadRoot(opt.UploadEndpoint),
 	}
 	f.features = (&fs.Features{
 		CaseInsensitive:         true,
@@ -1461,7 +1527,7 @@ func (f *Fs) changeNotifyRunner(ctx context.Context, notifyFunc func(string, fs.
 					// Item in the cache has the same or newer SequenceID than
 					// this event. Ignore this event, it must be old.
 					f.itemMetaCacheMu.Unlock()
-					fs.Debugf(f, "%s ignored due to old SequenceID (%q)", eventDetails, itemMeta.SequenceID)
+					fs.Debugf(f, "%s ignored due to old SequenceID (%d)", eventDetails, itemMeta.SequenceID)
 					continue
 				}
 
@@ -1711,7 +1777,7 @@ func (o *Object) upload(ctx context.Context, in io.Reader, leaf, directoryID str
 		MultipartMetadataName: "attributes",
 		MultipartContentName:  "contents",
 		MultipartFileName:     upload.Name,
-		RootURL:               uploadURL,
+		RootURL:               o.fs.uploadAPI(),
 		Options:               options,
 	}
 	// If object has an ID then it is existing so create a new version

@@ -1,0 +1,24 @@
+backend: "115"
+name: 115 Drive
+tier: Tier 2
+maintainers: External
+features_score: 4
+integration_tests: Unknown
+data_integrity: Hash
+performance: High
+adoption: Some use
+docs: Full
+security: High
+virtual: false
+remote: 'Test115:'
+features:
+- About
+- CanHaveEmptyDirectories
+- Copy
+- DirCacheFlush
+- DirMove
+- Move
+- Purge
+hashes:
+- sha1
+precision: 1

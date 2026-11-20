@@ -113,15 +113,15 @@ type e2eTestingContext struct {
 //	|-- ephemeralRepo
 //	`-- user
 //		`-- .config
-//			`-- rclone
-//				`-- rclone.conf
+//			`-- rrclone
+//				`-- rrclone.conf
 func makeE2eTestingContext(t *testing.T) e2eTestingContext {
 	tempDir := t.TempDir()
 
 	binDir := filepath.Join(tempDir, "bin")
 	homeDir := filepath.Join(tempDir, "user")
 	configDir := filepath.Join(homeDir, ".config")
-	rcloneConfigDir := filepath.Join(configDir, "rclone")
+	rcloneConfigDir := filepath.Join(configDir, "rrclone")
 	ephemeralRepoDir := filepath.Join(tempDir, "ephemeralRepo")
 
 	for _, dir := range []string{binDir, homeDir, configDir, rcloneConfigDir, ephemeralRepoDir} {
@@ -141,12 +141,12 @@ func (e *e2eTestingContext) installRcloneGitannexSymlink(t *testing.T) {
 		filepath.Join(e.binDir, "git-annex-remote-rclone-builtin")))
 }
 
-// Install a rclone.conf file in an appropriate location in the fake home
+// Install a rrclone.conf file in the default location in the fake home
 // directory. The config defines an rclone remote named "MyRcloneRemote" using
 // the local backend.
 func (e *e2eTestingContext) installRcloneConfig(t *testing.T) {
-	// Install the rclone.conf file that defines the remote.
-	rcloneConfigPath := filepath.Join(e.rcloneConfigDir, "rclone.conf")
+	// Install the rrclone.conf file that defines the remote.
+	rcloneConfigPath := filepath.Join(e.rcloneConfigDir, "rrclone.conf")
 	rcloneConfigContents := "[MyRcloneRemote]\ntype = local"
 	require.NoError(t, os.WriteFile(rcloneConfigPath, []byte(rcloneConfigContents), 0600))
 }

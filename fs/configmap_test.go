@@ -91,3 +91,38 @@ func TestOptionEnvVarsRedactsPassword(t *testing.T) {
 	assert.Equal(t, "obscured_pass", value)
 	assert.NotContains(t, buf.String(), "obscured_pass")
 }
+
+func TestLookupEnvLegacyFallback(t *testing.T) {
+	t.Setenv("RCLONE_TEST_LEGACY_ONLY", "legacy")
+	value, ok := LookupEnv("RRCLONE_TEST_LEGACY_ONLY")
+	assert.True(t, ok)
+	assert.Equal(t, "legacy", value)
+
+	t.Setenv("RRCLONE_TEST_LEGACY_BOTH", "new")
+	t.Setenv("RCLONE_TEST_LEGACY_BOTH", "legacy")
+	value, ok = LookupEnv("RRCLONE_TEST_LEGACY_BOTH")
+	assert.True(t, ok)
+	assert.Equal(t, "new", value)
+
+	_, ok = LookupEnv("RRCLONE_TEST_LEGACY_UNSET")
+	assert.False(t, ok)
+}
+
+// TestSetConfigFileOnlyExistingSection checks that config is only
+// saved to sections which exist in the config file.
+func TestSetConfigFileOnlyExistingSection(t *testing.T) {
+	oldHasSection, oldSet := ConfigFileHasSection, ConfigFileSet
+	t.Cleanup(func() { ConfigFileHasSection, ConfigFileSet = oldHasSection, oldSet })
+	ConfigFileHasSection = func(section string) bool { return section == "remote" }
+	saved := map[string]string{}
+	ConfigFileSet = func(section, key, value string) error {
+		saved[section+"."+key] = value
+		return nil
+	}
+
+	setConfigFile("remote").Set("key", "value")
+	setConfigFile(":backend").Set("key", "value")
+	setConfigFile("envremote").Set("key", "value")
+
+	assert.Equal(t, map[string]string{"remote.key": "value"}, saved)
+}

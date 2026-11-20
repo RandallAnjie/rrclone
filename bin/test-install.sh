@@ -61,6 +61,7 @@ www="${work}/www/latest/download"
 mkdir -p "$www"
 cp "${work}/payload/rrclone-linux-amd64.zip" "$www/"
 printf 'rclone v9.9.9-rrclone\n' > "${www}/version.txt"
+(cd "$www" && sha256sum ./*.zip version.txt > SHA256SUMS)
 
 port_file="${work}/port"
 python3 - "$work/www" "$port_file" <<'PY' &
@@ -138,6 +139,7 @@ chmod 755 "${samever}/bin/rclone"
 # Reuse the zip but advertise an official-looking version.txt
 cp "${work}/payload/rrclone-linux-amd64.zip" "${samever}/www/latest/download/"
 printf 'rclone v1.75.0\n' > "${samever}/www/latest/download/version.txt"
+cp "${www}/SHA256SUMS" "${samever}/www/latest/download/"
 same_port_file="${samever}/port"
 python3 - "$samever/www" "$same_port_file" <<'PY' &
 import http.server, socketserver, sys, pathlib
@@ -189,6 +191,23 @@ mkdir -p "$HOME"
 "${prefix3}/bin/rclone" --version | grep -qx 'rclone v1.75.0' || fail "--no-replace overwrote rclone"
 [ ! -e "${prefix3}/bin/rclone.official.bak" ] || fail "--no-replace should not backup/replace rclone"
 pass "install.sh --no-replace installs rrclone only"
+
+# A tampered download must be rejected
+cp "${www}/SHA256SUMS" "${work}/SHA256SUMS.good"
+sed -i 's/^[0-9a-f]\{8\}/00000000/' "${www}/SHA256SUMS"
+prefix4="${work}/prefix4"
+mkdir -p "${prefix4}/bin"
+export RRCLONE_RELEASE_BASE="$base"
+export RRCLONE_BIN_DIR="${prefix4}/bin"
+set +e
+"$INSTALL" --no-replace --force >/tmp/rrclone-install-badsum.log 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 6 ] || { cat /tmp/rrclone-install-badsum.log >&2; fail "expected exit 6 on checksum mismatch, got ${rc}"; }
+[ ! -e "${prefix4}/bin/rrclone" ] || fail "rrclone was installed despite checksum mismatch"
+grep -q 'Checksum mismatch' /tmp/rrclone-install-badsum.log || fail "no checksum mismatch message"
+cp "${work}/SHA256SUMS.good" "${www}/SHA256SUMS"
+pass "install.sh rejects a download that doesn't match SHA256SUMS"
 
 echo
 echo "All install.sh tests passed."

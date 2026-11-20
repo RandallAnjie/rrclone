@@ -9,6 +9,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCanonicalRoot(t *testing.T) {
+	for _, test := range []struct {
+		in, want string
+	}{
+		{"", ""},
+		{"  ", ""},
+		{"https://example.com", "https://example.com"},
+		{"https://example.com/", "https://example.com"},
+		{"https://example.com/api/", "https://example.com/api"},
+		{"http://localhost:8080/", "http://localhost:8080"},
+		{"example.com", "https://example.com"},
+		{"example.com:4443/gcs/api", "https://example.com:4443/gcs/api"},
+	} {
+		assert.Equal(t, test.want, CanonicalRoot(test.in), test.in)
+	}
+}
+
 func TestURLJoin(t *testing.T) {
 	for i, test := range []struct {
 		base   string
@@ -35,6 +52,46 @@ func TestURLJoin(t *testing.T) {
 		got, err := URLJoin(u, test.path)
 		gotOK := err == nil
 		what := fmt.Sprintf("test %d base=%q, val=%q", i, test.base, test.path)
+		assert.Equal(t, test.wantOK, gotOK, what)
+		var gotString string
+		if gotOK {
+			gotString = got.String()
+		}
+		assert.Equal(t, test.want, gotString, what)
+	}
+}
+
+func TestURLJoinRoot(t *testing.T) {
+	for i, test := range []struct {
+		base   string
+		root   string
+		wantOK bool
+		want   string
+	}{
+		{"http://example.com/dir/", "", true, "http://example.com/dir/"},
+		{"http://example.com/dir/", "potato", true, "http://example.com/dir/potato"},
+		{"http://example.com/dir/", "sub/potato/", true, "http://example.com/dir/sub/potato/"},
+		{"http://example.com/dir/", "/potato", true, "http://example.com/potato"},
+		{"http://example.com/dir/", "../potato", true, "http://example.com/potato"},
+		{"http://example.com/dir/", "With colon :", true, "http://example.com/dir/With%20colon%20:"},
+		{"http://example.com/dir/", "http://example.com/dir/", true, "http://example.com/dir/http://example.com/dir/"},
+		{"http://user:pass@example.com/dir/", "potato", true, "http://user:pass@example.com/dir/potato"},
+		// network-path references are rejected, even for the same host
+		{"http://example.com/dir/", "//evil.example/", false, ""},
+		{"http://example.com/dir/", "//evil.example", false, ""},
+		{"http://example.com/dir/", "//evil.example/potato", false, ""},
+		{"http://example.com/dir/", "//example.com/dir/", false, ""},
+		{"http://example.com/dir/", "//example.com:8080/dir/", false, ""},
+		{"http://example.com/dir/", "//user:pass@example.com/dir/", false, ""},
+		{"http://user:pass@example.com/dir/", "//other:pass@example.com/dir/", false, ""},
+		{"http://user:pass@example.com/dir/", "//example.com/dir/", false, ""},
+		{"http://example.com/dir/", "//[::1]/potato", false, ""},
+	} {
+		u, err := url.Parse(test.base)
+		require.NoError(t, err)
+		got, err := URLJoinRoot(u, test.root)
+		gotOK := err == nil
+		what := fmt.Sprintf("test %d base=%q, root=%q", i, test.base, test.root)
 		assert.Equal(t, test.wantOK, gotOK, what)
 		var gotString string
 		if gotOK {

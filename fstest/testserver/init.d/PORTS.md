@@ -19,7 +19,6 @@ They should be bound to localhost so they are not accessible externally.
 | 28623 | TestSFTPRcloneSSH |
 | 28624 | TestS3Rclone |
 | 28625 | TestS3Minio |
-| 28626 | TestS3MinioEdge |
 | 28627 | TestSFTPOpenssh |
 | 28628 | TestSwiftAIO |
 | 28629 | TestWebdavNextcloud |
@@ -33,7 +32,8 @@ They should be bound to localhost so they are not accessible externally.
 | 28637 | TestSMBKerberosCcache |
 | 28638 | TestSMBKerberosCcache |
 | 28639 | TestWebdavInfiniteScale |
-| 38081 | TestWebdavOwncloud |
+| 28640 | TestSia |
+| 28641 | TestWebdavOwncloud |
 
 ## Non localhost tests
 

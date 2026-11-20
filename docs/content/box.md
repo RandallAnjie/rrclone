@@ -126,9 +126,10 @@ have just set.
 
 ### Invalid refresh token
 
-According to the [box docs](https://developer.box.com/v2.0/docs/oauth-20#section-6-using-the-access-and-refresh-tokens):
+According to the [box docs](https://developer.box.com/guides/authentication/tokens/refresh/):
 
-> Each refresh_token is valid for one use in 60 days.
+> A Refresh Token is valid for 60 days and can be used to obtain a new Access
+> Token and Refresh Token only once.
 
 This means that if you
 
@@ -236,6 +237,29 @@ These only get replaced if they are the last character in the name:
 
 Invalid UTF-8 bytes will also be [replaced](/overview/#invalid-utf8),
 as they can't be used in JSON strings.
+
+### Custom API endpoint
+
+rclone talks to Box at `https://api.box.com/2.0` and uploads via
+`https://upload.box.com/api/2.0`. If those hosts are blocked, set
+`endpoint` and `upload_endpoint` to reverse proxies.
+
+OAuth uses `https://app.box.com`. Override that with the existing
+`auth_url` and `token_url` options.
+
+Example:
+
+```ini
+[box]
+type = box
+client_id = YOUR_CLIENT_ID
+client_secret = YOUR_CLIENT_SECRET
+token = {"access_token":"..."}
+auth_url = https://app.box.example.com/api/oauth2/authorize
+token_url = https://app.box.example.com/api/oauth2/token
+endpoint = https://api.box.example.com
+upload_endpoint = https://upload.box.example.com
+```
 
 ### Transfers
 

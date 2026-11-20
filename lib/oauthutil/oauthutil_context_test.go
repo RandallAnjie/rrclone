@@ -11,8 +11,10 @@ import (
 	"golang.org/x/oauth2"
 )
 
+type testContextKey struct{}
+
 func TestNewClientWithBaseClientDetachesCancellation(t *testing.T) {
-	parent, cancel := context.WithCancel(context.WithValue(context.Background(), struct{}{}, "ok"))
+	parent, cancel := context.WithCancel(context.WithValue(context.Background(), testContextKey{}, "ok"))
 	cancel()
 
 	baseClient := &http.Client{}
@@ -23,7 +25,7 @@ func TestNewClientWithBaseClientDetachesCancellation(t *testing.T) {
 	require.NotNil(t, ts)
 
 	assert.NoError(t, ts.ctx.Err())
-	assert.Equal(t, "ok", ts.ctx.Value(struct{}{}))
+	assert.Equal(t, "ok", ts.ctx.Value(testContextKey{}))
 	assert.Equal(t, baseClient, ts.ctx.Value(oauth2.HTTPClient))
 }
 

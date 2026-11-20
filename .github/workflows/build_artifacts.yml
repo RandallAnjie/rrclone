@@ -42,6 +42,9 @@ jobs:
 
       - name: Fetch GUI dist
         shell: bash
+        env:
+          # Anonymous GitHub API calls are often rate limited on shared runners
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           make fetch-gui
 

@@ -35,6 +35,7 @@ Rclone *("rsync for cloud storage")* 是一个用于在各种云存储之间同�
 - **123 云盘**：官方开放平台 API（开发者 client_id / secret），MD5 哈希、秒传、靠秒传实现的服务端复制、按接口 QPS 限速
 - **OpenList / AList**：原生 API 接入，一个后端访问 OpenList 里挂载的所有网盘（天翼、夸克、移动、迅雷、阿里、百度……）；支持哈希、元数据密码、跨存储复制 / 移动（等待后台任务）
 - **Cloudreve v4**（社区版 + Pro）：密码 / 2FA / OAuth（支持 OIDC 单点登录）登录，分享链接只读访问，Pro 多存储策略选择，按存储策略直传（本机 / 从机 / OneDrive / S3 / KS3 / OSS / COS / OBS / 七牛）和 AES-256-CTR 客户端加密
+- **Google Drive 直连**：`--drive-direct` 扫描能连通的 Google IP，Drive API 和上传下载直连（证书仍按真实域名校验）。后台测速后，上传和下载各走最快的路径（最快的几个 IP，或 `endpoint` 反代），某条路径出错或卡住就暂时避开它、自动换下一条
 - **Google Drive 多 OAuth 账号轮换**：`--drive-oauth-account-files`
 - **OneDrive 多 OAuth 账号 / 应用轮换**：`--onedrive-oauth-account-files`，429 限流 / token 失效自动切号
 - **Dropbox 多 OAuth 账号 / App Key 轮换**：`--dropbox-oauth-account-files`，限流自动切号
@@ -46,7 +47,9 @@ Rclone *("rsync for cloud storage")* 是一个用于在各种云存储之间同�
 ### 维护：CI 与上游同步
 
 - `.github/workflows/rrclone_ci.yml`：官方 `build.yml` 只在 rclone/rclone 里跑，本分支用它在 Linux / Windows / macOS 跑单测，对 fork 自己的包跑 `-race`，再跑 golangci-lint。
-- `.github/workflows/upstream_sync.yml`：每周一 10:00（北京时间）把 rclone/master 合到 `sync/upstream-auto` 分支。合并干净就开 / 更新一个 PR 等你审；有冲突就开一个 `upstream-sync` 标签的 issue，列出冲突文件和本地解决步骤。也可以在 Actions 页面手动运行。
+- `.github/workflows/dashboard.yml`：看板有改动时跑 `npm ci`、单测、eslint 和 `next build`。`@heroui-pro/react` 在 npm 上只是占位包，真正的组件由它的 postinstall 用仓库 Secret `HEROUI_AUTH_TOKEN` 下载，没有这个 Secret 时跳过构建。
+- `.github/workflows/upstream_sync.yml`：每周一 10:00（北京时间）把 rclone/master 合到 `sync/upstream-auto` 分支。合并干净就开 / 更新一个 PR 等你审；有冲突就开一个 `upstream-sync` 标签的 issue，列出冲突文件和本地解决步骤。仓库关了 Issues 时，改为让这次运行失败，冲突文件和解决步骤写在运行摘要里。也可以在 Actions 页面手动运行。
+- GitHub 在 fork 仓库里默认不跑定时工作流，要先在 Actions 页面选中 `upstream-sync`，点 “Enable workflow” 启用，每周同步才会开始。
 - 建议在仓库 Secrets 里加 `SYNC_TOKEN`：一个只授权本仓库的 fine-grained token，Contents、Pull requests、Issues、Workflows 都给读写。没有它时用内置 token，但 GitHub 不允许内置 token 推送改动了 `.github/workflows` 的合并，也不会给它开的 PR 自动跑 CI（脚本会改用手动触发 CI），开 PR 还需要打开 Settings → Actions → General → “Allow GitHub Actions to create and approve pull requests”。
 - 合并同步 PR 时用 merge commit，不要 squash，否则下次同步会把同一批上游提交再带一遍。
 

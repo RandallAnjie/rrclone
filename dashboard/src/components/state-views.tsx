@@ -5,7 +5,7 @@ import { Alert, Button, Spinner } from "@heroui/react";
 
 export function LoadingState({ label = "正在读取 rclone 状态…" }: { label?: string }) {
   return (
-    <div className="flex items-center gap-3 py-10 text-sm text-muted">
+    <div className="empty-chart mb-4 min-h-0 flex-row justify-start gap-3 py-5 text-left">
       <Spinner size="sm" />
       <span>{label}</span>
     </div>
@@ -62,7 +62,7 @@ export function ErrorState({
 
 export function BlankState({ title, description }: { title: string; description: string }) {
   return (
-    <EmptyState className="py-10">
+    <EmptyState className="rounded-2xl border border-dashed border-border/80 bg-surface/30 py-12">
       <EmptyState.Header>
         <EmptyState.Title>{title}</EmptyState.Title>
         <EmptyState.Description>{description}</EmptyState.Description>

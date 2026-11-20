@@ -48,6 +48,7 @@ type fakeAli struct {
 	expired   int    // upload URLs refused as expired
 	expireAt  int    // refuse the upload of this part number once
 	badName   string // refuse renames to this name
+	lists     int    // folder listings served
 }
 
 type fakeFile struct {
@@ -190,6 +191,7 @@ func (s *fakeAli) handle(w http.ResponseWriter, r *http.Request) {
 		sp.PersonalSpaceInfo.TotalSize, sp.PersonalSpaceInfo.UsedSize = 1<<40, used
 		s.reply(w, sp)
 	case "/adrive/v1.0/openFile/list":
+		s.lists++
 		parent := str("parent_file_id")
 		if !s.exists(parent) {
 			s.fail(w, http.StatusNotFound, api.CodeNotFoundFile)
@@ -279,9 +281,17 @@ func (s *fakeAli) handle(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, http.StatusNotFound, api.CodeNotFoundFile)
 			return
 		}
-		if c := s.live(f.ParentFileID, str("name"), ""); c != nil && c != f {
-			s.fail(w, http.StatusConflict, api.CodeAlreadyExist)
+		// A rename to the current name is taken to change and check
+		// nothing, the least the real one may do
+		if str("name") == f.Name {
+			s.reply(w, f.File)
 			return
+		}
+		for _, c := range s.files {
+			if c != f && c.ParentFileID == f.ParentFileID && c.Name == str("name") {
+				s.fail(w, http.StatusConflict, api.CodeAlreadyExist)
+				return
+			}
 		}
 		if s.badName != "" && str("name") == s.badName {
 			s.fail(w, http.StatusBadRequest, "InvalidParameter.Name")
@@ -401,12 +411,24 @@ func TestCopyOverExisting(t *testing.T) {
 	o := put("a/file.txt", "source")
 	put("b/file.txt", "same name")
 	put("c/other.txt", "other name")
+	require.NoError(t, f.Mkdir(ctx, "e"))
 
+	// Copies don't list the destination, which is slow in big folders
+	s.mu.Lock()
+	lists := s.lists
+	s.mu.Unlock()
 	for _, remote := range []string{"b/file.txt", "c/other.txt"} {
 		_, err := f.Copy(ctx, o, remote)
 		assert.ErrorIs(t, err, fs.ErrorCantCopy, remote)
 	}
-	for dir, want := range map[string]string{"b": "b/file.txt", "c": "c/other.txt"} {
+	c, err := f.Copy(ctx, o, "e/file.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "e/file.txt", c.Remote())
+	s.mu.Lock()
+	assert.Equal(t, lists, s.lists)
+	s.mu.Unlock()
+
+	for dir, want := range map[string]string{"b": "b/file.txt", "c": "c/other.txt", "e": "e/file.txt"} {
 		entries, err := f.List(ctx, dir)
 		require.NoError(t, err)
 		require.Len(t, entries, 1, dir)
@@ -417,7 +439,7 @@ func TestCopyOverExisting(t *testing.T) {
 	s.mu.Lock()
 	s.badName = "renamed.txt"
 	s.mu.Unlock()
-	_, err := f.Copy(ctx, o, "d/renamed.txt")
+	_, err = f.Copy(ctx, o, "d/renamed.txt")
 	require.Error(t, err)
 	entries, err := f.List(ctx, "d")
 	require.NoError(t, err)

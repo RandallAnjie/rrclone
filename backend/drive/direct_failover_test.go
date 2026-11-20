@@ -62,6 +62,25 @@ func TestDirectRoute(t *testing.T) {
 	assert.False(t, rt.relayable)
 }
 
+func TestDirectTransfer(t *testing.T) {
+	for _, test := range []struct {
+		dir  directDir
+		in   string
+		want bool
+	}{
+		{directDown, "https://www.googleapis.com/drive/v3/files?q=x", false},
+		{directDown, "https://www.googleapis.com:8443/drive/v3/about", false},
+		{directDown, "https://www.googleapis.com/drive/v3/files/x?alt=media", true},
+		{directUp, "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable", true},
+		{directDown, "https://doc-0k-4c-docs.googleusercontent.com/x", true},
+		{directDown, "https://drive.usercontent.google.com/download?id=x", true},
+	} {
+		u, err := url.Parse(test.in)
+		require.NoError(t, err)
+		assert.Equal(t, test.want, directTransfer(test.dir, u), test.in)
+	}
+}
+
 func TestDirectOrder(t *testing.T) {
 	now := time.Now()
 	r := &directRouter{

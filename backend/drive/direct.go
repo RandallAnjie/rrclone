@@ -537,6 +537,13 @@ func directPathFailed(status int) bool {
 		(status >= 520 && status <= 530) // Cloudflare
 }
 
+// directTransfer reports whether a request to the official URL u moves
+// file data. Hosts other than the API host only serve downloads.
+func directTransfer(dir directDir, u *url.URL) bool {
+	return dir == directUp || u.Query().Get("alt") == "media" ||
+		!isOfficialGoogleAPIHost(strings.ToLower(u.Hostname()))
+}
+
 // directPathKey in a request context forces a path, for speed tests.
 type directPathKey struct{}
 
@@ -593,8 +600,8 @@ func (d *directTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if forced != "" {
 		paths = []string{forced}
 	} else {
-		if dir == directUp || rt.official.Query().Get("alt") == "media" || !rt.relayable {
-			// Only transfers start a speed test, not a quick listing.
+		// Only transfers start a speed test, not a quick listing.
+		if directTransfer(dir, rt.official) {
 			d.r.maybeSpeedTest(ctx)
 		}
 		paths = d.r.paths(ctx, dir, rt)

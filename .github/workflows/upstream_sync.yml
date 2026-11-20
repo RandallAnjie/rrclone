@@ -3,7 +3,11 @@
 #
 # A clean merge is pushed to the sync/upstream-auto branch and opened
 # (or updated) as a PR against master for review. A conflicting merge
-# opens (or updates) an issue listing the conflicted files instead.
+# opens (or updates) an issue listing the conflicted files instead, or
+# fails the run with them in its summary when issues are turned off.
+#
+# GitHub keeps scheduled workflows off in a fork until this workflow is
+# enabled on the repository's Actions tab.
 #
 # Set the SYNC_TOKEN secret to a personal access token with Contents,
 # Pull requests, Issues and Workflows read/write on this repo. Without
@@ -58,10 +62,18 @@ jobs:
           git remote add upstream "$UPSTREAM"
           git fetch --no-tags upstream master
 
-          # Issue helpers: one open issue per label, updated by comments
+          # Issue helpers: one open issue per label, updated by comments.
+          # With issues turned off the report goes to the run summary and
+          # the run fails, so GitHub still notifies someone.
+          issues=$(gh repo view "$GITHUB_REPOSITORY" --json hasIssuesEnabled -q .hasIssuesEnabled)
           gh label create "$CONFLICT_LABEL" --color FBCA04 --description "Automatic upstream sync needs attention" 2>/dev/null || true
           report() { # title, body
             local num
+            if [ "$issues" != "true" ]; then
+              printf '## %s\n\n%s\n' "$1" "$2" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::$1. Issues are turned off, so the details are in the run summary."
+              exit 1
+            fi
             num=$(gh issue list --label "$CONFLICT_LABEL" --state open --json number -q '.[0].number')
             if [ -n "$num" ]; then
               gh issue comment "$num" --body "$2"
@@ -71,6 +83,9 @@ jobs:
           }
           resolved() {
             local num
+            if [ "$issues" != "true" ]; then
+              return 0
+            fi
             num=$(gh issue list --label "$CONFLICT_LABEL" --state open --json number -q '.[0].number')
             if [ -n "$num" ]; then
               gh issue close "$num" --comment "$1"

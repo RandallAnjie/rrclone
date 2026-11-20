@@ -59,7 +59,9 @@ upload has finished, so a failed update leaves the old file.
 
 Moves, renames, directory moves and copies are done by Aliyun Drive.
 Copies within one folder aren't supported, so rclone downloads and
-uploads instead.
+uploads instead. The same goes for a copy onto an existing file,
+because Aliyun Drive's copy can't replace one and would leave two files
+of the same name.
 
 ## Rate limits
 

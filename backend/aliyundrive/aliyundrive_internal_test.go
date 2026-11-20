@@ -45,8 +45,9 @@ type fakeAli struct {
 	refresh   string
 	calls     int
 	refreshes int
-	expired   int // upload URLs refused as expired
-	expireAt  int // refuse the upload of this part number once
+	expired   int    // upload URLs refused as expired
+	expireAt  int    // refuse the upload of this part number once
+	badName   string // refuse renames to this name
 }
 
 type fakeFile struct {
@@ -282,6 +283,10 @@ func (s *fakeAli) handle(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, http.StatusConflict, api.CodeAlreadyExist)
 			return
 		}
+		if s.badName != "" && str("name") == s.badName {
+			s.fail(w, http.StatusBadRequest, "InvalidParameter.Name")
+			return
+		}
 		f.Name = str("name")
 		s.reply(w, f.File)
 	case "/adrive/v1.0/openFile/move":
@@ -378,6 +383,45 @@ func newTestFs(t *testing.T, s *fakeAli, m configmap.Simple) *Fs {
 	f, err := NewFs(context.Background(), "test", "", m)
 	require.NoError(t, err)
 	return f.(*Fs)
+}
+
+// TestCopyOverExisting checks a copy never leaves two files of one name.
+// The copy API can't refuse or replace an existing file, so a copy onto
+// one returns fs.ErrorCantCopy and rclone uploads a new version instead.
+func TestCopyOverExisting(t *testing.T) {
+	noLimits(t)
+	ctx := context.Background()
+	s := newFakeAli(t)
+	f := newTestFs(t, s, s.config())
+	put := func(remote, content string) fs.Object {
+		o, err := f.Put(ctx, strings.NewReader(content), object.NewStaticObjectInfo(remote, time.Now(), int64(len(content)), true, nil, nil))
+		require.NoError(t, err)
+		return o
+	}
+	o := put("a/file.txt", "source")
+	put("b/file.txt", "same name")
+	put("c/other.txt", "other name")
+
+	for _, remote := range []string{"b/file.txt", "c/other.txt"} {
+		_, err := f.Copy(ctx, o, remote)
+		assert.ErrorIs(t, err, fs.ErrorCantCopy, remote)
+	}
+	for dir, want := range map[string]string{"b": "b/file.txt", "c": "c/other.txt"} {
+		entries, err := f.List(ctx, dir)
+		require.NoError(t, err)
+		require.Len(t, entries, 1, dir)
+		assert.Equal(t, want, entries[0].Remote())
+	}
+
+	// A copy which can't be renamed into place is removed again
+	s.mu.Lock()
+	s.badName = "renamed.txt"
+	s.mu.Unlock()
+	_, err := f.Copy(ctx, o, "d/renamed.txt")
+	require.Error(t, err)
+	entries, err := f.List(ctx, "d")
+	require.NoError(t, err)
+	assert.Empty(t, entries)
 }
 
 func TestUploadPartsAndReplace(t *testing.T) {

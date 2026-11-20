@@ -114,11 +114,16 @@ jobs:
             ./fs/config/... \
             ./fs/fshttp/... \
             ./backend/115/... \
+            ./backend/aliyundrive/... \
+            ./backend/baidu/... \
             ./backend/box/... \
+            ./backend/cloudreve/... \
             ./backend/drive/... \
             ./backend/dropbox/... \
             ./backend/googlephotos/... \
-            ./backend/onedrive/...
+            ./backend/onedrive/... \
+            ./backend/openlist/... \
+            ./backend/pan123/...
 
   lint:
     timeout-minutes: 30

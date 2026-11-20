@@ -29,6 +29,15 @@ RRCLONE_GHPROXY=https://ghfast.top/
 unset RRCLONE_GHPROXY
 pass "apply_ghproxy prefixes GitHub URLs once"
 
+# --- unit: curl_get -------------------------------------------------------------
+curl() { printf '%s\n' "$*"; }
+[ "$(curl_get -o f https://example.com/x)" = "-fsSL -o f https://example.com/x" ] \
+  || fail "curl_get without RRCLONE_PROXY"
+[ "$(RRCLONE_PROXY=socks5://127.0.0.1:7891 curl_get -o f https://example.com/x)" = "-fsSL --proxy socks5://127.0.0.1:7891 -o f https://example.com/x" ] \
+  || fail "curl_get with RRCLONE_PROXY"
+unset -f curl
+pass "curl_get passes RRCLONE_PROXY to curl"
+
 # --- unit: invoking_user_home / migrate_config --------------------------------
 unit_dir=$(mktemp -d)
 trap 'rm -rf "$unit_dir"' EXIT

@@ -107,6 +107,8 @@ curl -fsSL ${GH}/https://raw.githubusercontent.com/RandallAnjie/rrclone/master/i
 
 镜像和本机代理可以一起用：`sudo RRCLONE_GHPROXY=${GH} RRCLONE_PROXY=http://127.0.0.1:7890 bash`。
 
+镜像能改动它转发的任何文件。`SHA256SUMS` 也经同一个镜像下载，所以校验只能发现下载损坏，发现不了镜像篡改。只用你信任的镜像。
+
 默认配置文件是 `~/.config/rrclone/rrclone.conf`，不是官方的 `~/.config/rclone/rclone.conf`。环境变量优先读 `RRCLONE_*`，没有时回退 `RCLONE_*`。
 
 ## Storage providers

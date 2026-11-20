@@ -91,7 +91,7 @@ Options:
 Environment:
   RRCLONE_REPO           GitHub repo (default: RandallAnjie/rrclone)
   RRCLONE_GHPROXY        GitHub mirror prefix, e.g. https://ghfast.top
-  RRCLONE_PROXY          HTTP/SOCKS proxy for curl/git (sudo drops https_proxy)
+  RRCLONE_PROXY          HTTP/SOCKS proxy for curl, git and go (sudo drops https_proxy)
   RRCLONE_RELEASE_BASE   Release download base URL (overrides GHPROXY for zips)
   RRCLONE_BIN_DIR        Binary install dir (default: /usr/bin, or /usr/local/bin on macOS)
   RRCLONE_MIGRATE_FROM   Explicit path to an official rclone.conf to copy
@@ -413,6 +413,10 @@ build_from_source() {
   log "Building rrclone from source in ${src} ..."
   (
     cd "$src"
+    # go reads the proxy for module downloads from the environment
+    if [ -n "${RRCLONE_PROXY:-}" ]; then
+      export HTTPS_PROXY="$RRCLONE_PROXY" HTTP_PROXY="$RRCLONE_PROXY"
+    fi
     CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o "${tmp_dir}/rrclone" .
   )
   mkdir -p "${tmp_dir}/extract"

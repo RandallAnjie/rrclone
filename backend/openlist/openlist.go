@@ -627,13 +627,28 @@ func (f *Fs) relocate(ctx context.Context, srcAbs, dstAbs string, copy bool) err
 		if srcLeaf == dstLeaf {
 			return nil
 		}
-		return f.renameAbs(ctx, path.Join(dstDir, srcLeaf), dstLeaf)
-	}
-	if !isExist(err) || srcLeaf == dstLeaf {
+		arrived := path.Join(dstDir, srcLeaf)
+		err = f.renameAbs(ctx, arrived, dstLeaf)
+		if err != nil && copy {
+			if delErr := f.removeAbs(ctx, arrived); delErr != nil {
+				fs.Debugf(f, "Failed to remove the partial copy %q: %v", arrived, delErr)
+			}
+			if isExist(err) {
+				return fs.ErrorCantCopy
+			}
+		}
 		return err
 	}
+	if !isExist(err) {
+		return err
+	}
+	// OpenList won't copy over a file without overwrite, which some
+	// storages can't do safely, so rclone uploads a new version instead
 	if copy {
 		return fs.ErrorCantCopy
+	}
+	if srcLeaf == dstLeaf {
+		return err
 	}
 	// The destination has the source name: rename first, through a
 	// temporary name if the source folder has the destination name.

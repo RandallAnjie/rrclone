@@ -270,7 +270,7 @@ func newDirectRelayTest(t *testing.T) (context.Context, *Options, *fakeDrive, *f
 	return ctx, opt, google, relay
 }
 
-func doDirect(t *testing.T, client *http.Client, ctx context.Context, method, u string) (string, error) {
+func doDirect(ctx context.Context, t *testing.T, client *http.Client, method, u string) (string, error) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(ctx, method, u, nil)
 	require.NoError(t, err)
@@ -302,7 +302,7 @@ func TestDirectFailover(t *testing.T) {
 	relayAPI := strings.TrimSuffix(driveAPIEndpoint(opt.Endpoint, "v3"), "/drive/v3/")
 
 	// A download fails over from the refusing IP to the next one.
-	body, err := doDirect(t, client, ctx, http.MethodGet, relayAPI+"/drive/v3/files/x")
+	body, err := doDirect(ctx, t, client, http.MethodGet, relayAPI+"/drive/v3/files/x")
 	require.NoError(t, err)
 	assert.Equal(t, " /drive/v3/files/x", body, "served by Google directly")
 	r.mu.Lock()
@@ -310,22 +310,22 @@ func TestDirectFailover(t *testing.T) {
 	r.mu.Unlock()
 
 	// Uploads prefer the relay.
-	body, err = doDirect(t, client, ctx, http.MethodPost, relayAPI+"/upload/drive/v3/x?uploadType=multipart")
+	body, err = doDirect(ctx, t, client, http.MethodPost, relayAPI+"/upload/drive/v3/x?uploadType=multipart")
 	require.NoError(t, err)
 	assert.Equal(t, "/google /upload/drive/v3/x", body)
 
 	// A download that stalls marks the path bad...
-	_, err = doDirect(t, client, ctx, http.MethodGet, relayAPI+"/drive/v3/files/stall?alt=media")
+	_, err = doDirect(ctx, t, client, http.MethodGet, relayAPI+"/drive/v3/files/stall?alt=media")
 	assert.ErrorIs(t, err, errDirectStalled)
 	assert.Equal(t, 1, google.count("GET /drive/v3/files/stall"))
 
 	// ...so the retry goes through the relay.
-	body, err = doDirect(t, client, ctx, http.MethodGet, relayAPI+"/drive/v3/files/y")
+	body, err = doDirect(ctx, t, client, http.MethodGet, relayAPI+"/drive/v3/files/y")
 	require.NoError(t, err)
 	assert.Equal(t, "/google /drive/v3/files/y", body)
 
 	// Token refresh on the relay host isn't touched.
-	body, err = doDirect(t, client, ctx, http.MethodPost, strings.TrimSuffix(relayAPI, "/google")+"/token")
+	body, err = doDirect(ctx, t, client, http.MethodPost, strings.TrimSuffix(relayAPI, "/google")+"/token")
 	require.NoError(t, err)
 	assert.Equal(t, "/google /token", body)
 	assert.Equal(t, 1, relay.count("POST /token"))
@@ -345,12 +345,12 @@ func TestDirectFailoverNotRetryingWrites(t *testing.T) {
 	relayAPI := strings.TrimSuffix(driveAPIEndpoint(opt.Endpoint, "v3"), "/drive/v3/")
 
 	// The write fails rather than being sent twice...
-	_, err := doDirect(t, client, ctx, http.MethodPost, relayAPI+"/drive/v3/files")
+	_, err := doDirect(ctx, t, client, http.MethodPost, relayAPI+"/drive/v3/files")
 	require.Error(t, err)
 	assert.Equal(t, 0, relay.count("POST /drive/v3/files"))
 
 	// ...and the caller's retry takes the next path.
-	body, err := doDirect(t, client, ctx, http.MethodPost, relayAPI+"/drive/v3/files")
+	body, err := doDirect(ctx, t, client, http.MethodPost, relayAPI+"/drive/v3/files")
 	require.NoError(t, err)
 	assert.Equal(t, "/google /drive/v3/files", body)
 }

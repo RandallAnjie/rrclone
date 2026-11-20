@@ -19,7 +19,7 @@ rrclone 是 [rclone](https://rclone.org) 的增强分支。命令、后端和官
 | 能力 | 原版 rclone | rrclone |
 | --- | --- | --- |
 | 70+ 云存储后端、sync / copy / mount / crypt / RC | 有 | 有，持续跟上游 |
-| 配置文件 | `~/.config/rclone/rclone.conf` | `~/.config/rrclone/rrclone.conf`（可用 `--migrate` 从官方配置拷过来） |
+| 配置文件 | `~/.config/rclone/rclone.conf` | `~/.config/rrclone/rrclone.conf`（安装脚本替换 `rclone` 时会从官方配置拷过来） |
 | 环境变量 | 只有 `RCLONE_*` | 先读 `RRCLONE_*`，没有再读 `RCLONE_*` |
 | Google / Dropbox 等官方 API 被墙 | 只能改 OAuth 的 `auth_url` / `token_url`，数据面主机仍写死 | 再加 `endpoint`（以及 Dropbox / Box 的上传主机）走反代 |
 | 115 网盘 | 无 | 用浏览器 cookie 走 web API，不用已停的 OpenAPI |
@@ -180,16 +180,13 @@ Linux / macOS / BSD：
 sudo -v ; curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh | sudo bash
 ```
 
-从官方 rclone 把配置拷过来（不覆盖已有 rrclone 配置）：
+默认会替换 `rclone` 命令，并把官方的 `rclone.conf` 拷成 `rrclone.conf`（已有 rrclone 配置时不拷）。
 
-```console
-sudo -v ; curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh | sudo bash -s -- --migrate
-```
-
-只装 `rrclone`、不动现在的 `rclone` 命令：
+只装 `rrclone`、不动现在的 `rclone` 命令。这时默认不拷配置，因为两份同样的配置可能互相作废对方的 OAuth 令牌，要拷时加 `--migrate`：
 
 ```console
 sudo -v ; curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh | sudo bash -s -- --no-replace
+sudo -v ; curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh | sudo bash -s -- --no-replace --migrate
 ```
 
 ### 走代理更新

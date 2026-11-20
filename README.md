@@ -52,22 +52,22 @@ Rclone *("rsync for cloud storage")* 是一个用于在各种云存储之间同�
 
 ## 安装（从官方 rclone 一键切到 rrclone）
 
-和官方 `https://rclone.org/install.sh` 一样，Linux / macOS / BSD 可以用一键脚本。默认会安装 `rrclone`，并替换 `rclone` 命令（先把原来的二进制备份成 `rclone.official.bak`）。
+和官方 `https://rclone.org/install.sh` 一样，Linux / macOS / BSD 可以用一键脚本。默认会安装 `rrclone`，并替换 `rclone` 命令（先把原来的二进制备份成 `rclone.official.bak`）。替换时还会把 `~/.config/rclone/rclone.conf` 复制到 `~/.config/rrclone/rrclone.conf`，所以原来的 remote 都还在（目标文件已存在时不复制，不会覆盖已有 rrclone 配置）。
 
 ```console
 sudo -v ; curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh | sudo bash
 ```
 
-已经在用官方 rclone、要把配置一起迁过来时加上 `--migrate`。这会把 `~/.config/rclone/rclone.conf` 复制到 `~/.config/rrclone/rrclone.conf`（目标文件不存在时才复制，不会覆盖已有 rrclone 配置）：
-
-```console
-sudo -v ; curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh | sudo bash -s -- --migrate
-```
-
-只装 `rrclone`、不动现在的 `rclone` 命令：
+只装 `rrclone`、不动现在的 `rclone` 命令。这时默认不复制配置，因为两个程序各用一份同样的配置，像 Box 这种刷新令牌会作废旧令牌的网盘，会互相把对方的登录弄失效：
 
 ```console
 sudo -v ; curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh | sudo bash -s -- --no-replace
+```
+
+确定要复制配置时再加上 `--migrate`：
+
+```console
+sudo -v ; curl -fsSL https://raw.githubusercontent.com/RandallAnjie/rrclone/master/install.sh | sudo bash -s -- --no-replace --migrate
 ```
 
 发布包也可以从 GitHub Releases 下载（`rrclone-<os>-<arch>.zip`）。打 `v*` 标签或在 Actions 里手动跑 `release` workflow 就会生成这些 zip。在还没有 Release 的机器上，脚本会回退到本机 `go build`（需要已安装 Go）。

@@ -67,7 +67,9 @@ knows with uploads, which lets some drives skip the upload entirely.
 Within one mount OpenList copies and moves straight away. Between mounts
 it runs a background task. rclone waits for the task, for up to
 `task_timeout` (default 2 hours). Copies within one folder aren't
-supported, so rclone downloads and uploads instead.
+supported, so rclone downloads and uploads instead. rclone also uploads
+instead of copying over an existing file. OpenList's copy only replaces
+a file when asked to overwrite, and some storages then keep both.
 
 ## Limitations
 

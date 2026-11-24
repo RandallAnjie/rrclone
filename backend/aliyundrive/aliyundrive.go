@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -732,12 +733,26 @@ func (f *Fs) Copy(ctx context.Context, src fs.Object, remote string) (fs.Object,
 	if r.FileID == "" {
 		return nil, errors.New("aliyundrive: copy returned no file")
 	}
-	// The copy keeps the source name, and Aliyun Drive allows two
-	// files of one name, so rename the copy by its ID.
-	if path.Base(srcObj.remote) != dstLeaf {
-		if err := f.rename(ctx, r.FileID, dstLeaf); err != nil {
-			return nil, err
+	// The copy keeps the source name even if a file of that name exists,
+	// so rename it by its ID, which refuses an existing name. A copy
+	// keeping its name goes through a temporary name to be checked too.
+	if path.Base(srcObj.remote) == dstLeaf {
+		err = f.rename(ctx, r.FileID, ".rclone-copy-"+strconv.FormatInt(time.Now().UnixNano(), 36)+"-"+dstLeaf)
+	}
+	if err == nil {
+		err = f.rename(ctx, r.FileID, dstLeaf)
+	}
+	if err != nil {
+		// Deleted rather than trashed, as nobody asked for this copy
+		delReq := &api.FileRequest{DriveID: f.driveID, FileID: r.FileID}
+		if delErr := f.call(ctx, f.st.other, "/adrive/v1.0/openFile/delete", delReq, nil); delErr != nil {
+			fs.Debugf(f, "Failed to remove the partial copy %q: %v", r.FileID, delErr)
 		}
+		// Uploading over a file replaces it, which the copy API can't do
+		if apiCode(err) == api.CodeAlreadyExist {
+			return nil, fs.ErrorCantCopy
+		}
+		return nil, err
 	}
 	o := *srcObj
 	o.fs, o.remote, o.id, o.parentID = f, remote, r.FileID, dstDirID

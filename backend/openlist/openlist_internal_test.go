@@ -352,6 +352,27 @@ func put(t *testing.T, f *Fs, remote, content string) fs.Object {
 	return o
 }
 
+// TestCopyOverExisting checks a copy which can't replace its destination
+// leaves everything as it was, so rclone can upload a new version instead.
+func TestCopyOverExisting(t *testing.T) {
+	ctx := context.Background()
+	s := newFakeOpenList(t)
+	f := newTestFs(t, s, "mount")
+	o := put(t, f, "a/file.txt", "source")
+	put(t, f, "b/file.txt", "same name")
+	put(t, f, "c/other.txt", "other name")
+
+	for _, remote := range []string{"b/file.txt", "c/other.txt"} {
+		_, err := f.Copy(ctx, o, remote)
+		assert.ErrorIs(t, err, fs.ErrorCantCopy, remote)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	assert.Equal(t, "same name", string(s.nodes["/mount/b/file.txt"].data))
+	assert.Equal(t, "other name", string(s.nodes["/mount/c/other.txt"].data))
+	assert.NotContains(t, s.nodes, "/mount/c/file.txt", "the copy made before the rename is removed")
+}
+
 // TestCrossStorageTasks checks copies and moves between mounts wait
 // for OpenList's background tasks.
 func TestCrossStorageTasks(t *testing.T) {

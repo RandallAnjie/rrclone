@@ -63,7 +63,8 @@ members (rclone reads the membership), or `block_size`.
 ## Server-side operations
 
 Copies, moves and renames are done by Baidu, including a rename in the
-same request as a copy or move.
+same request as a copy or move. A copy onto an existing file is
+uploaded instead.
 
 ## Reverse proxies
 

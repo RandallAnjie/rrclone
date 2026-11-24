@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/rclone/rclone/backend/baidu/api"
+	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/object"
 	"github.com/rclone/rclone/fstest/fstests"
@@ -414,6 +415,35 @@ func TestUploadBlocksRapidAndToken(t *testing.T) {
 	assert.Equal(t, 1, s.refreshes)
 	s.mu.Unlock()
 	assert.Contains(t, m["token"], `"refresh_token":"r2"`, "rotated refresh token saved")
+}
+
+// TestCopyOverExisting checks a copy onto an existing file leaves it
+// alone and returns fs.ErrorCantCopy, so rclone uploads a new version.
+func TestCopyOverExisting(t *testing.T) {
+	ctx := context.Background()
+	s := newFakeBaidu(t)
+	f := newTestFs(t, s, s.config())
+	modTime := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	put := func(remote, content string) fs.Object {
+		o, err := f.Put(ctx, strings.NewReader(content), object.NewStaticObjectInfo(remote, modTime, int64(len(content)), true, nil, nil))
+		require.NoError(t, err)
+		return o
+	}
+	o := put("a/file.txt", "source")
+	put("b/file.txt", "same name")
+	put("b/other.txt", "other name")
+
+	for remote, want := range map[string]string{"b/file.txt": "same name", "b/other.txt": "other name"} {
+		_, err := f.Copy(ctx, o, remote)
+		assert.ErrorIs(t, err, fs.ErrorCantCopy, remote)
+		dst, err := f.NewObject(ctx, remote)
+		require.NoError(t, err)
+		rc, err := dst.Open(ctx)
+		require.NoError(t, err)
+		got, _ := io.ReadAll(rc)
+		_ = rc.Close()
+		assert.Equal(t, want, string(got), remote)
+	}
 }
 
 func TestSpool(t *testing.T) {

@@ -84,6 +84,11 @@ Apply for one at https://www.123pan.com/developer.`,
 			Required:   true,
 			IsPassword: true,
 		}, {
+			Name:      config.ConfigToken,
+			Help:      "Access token as a JSON blob, saved by rclone.",
+			Advanced:  true,
+			Sensitive: true,
+		}, {
 			Name:     "api_url",
 			Help:     "URL of the open platform API, or a reverse proxy of it.",
 			Default:  defaultAPIURL,

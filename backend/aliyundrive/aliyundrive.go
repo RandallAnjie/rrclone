@@ -96,6 +96,11 @@ Leave blank normally.`,
 			Advanced:  true,
 			Sensitive: true,
 		}, {
+			Name:      config.ConfigToken,
+			Help:      "OAuth Access Token as a JSON blob, saved by rclone.",
+			Advanced:  true,
+			Sensitive: true,
+		}, {
 			Name:    "drive_type",
 			Help:    "Which drive of the account to use.",
 			Default: "default",

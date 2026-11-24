@@ -594,6 +594,8 @@ func updateRemote(ctx context.Context, name string, keyValues rc.Params, opt Upd
 	choices := configmap.Simple{}
 	ephemeral := configmap.Simple{}
 	m := fs.ConfigMap(ri.Prefix, ri.Options, name, nil)
+	// The user may set keys which aren't backend options
+	userM := fs.ConfigMap(ri.Prefix, nil, name, nil)
 
 	// Set the config
 	for k, v := range keyValues {
@@ -615,7 +617,7 @@ func updateRemote(ctx context.Context, name string, keyValues rc.Params, opt Upd
 		}
 		choices.Set(k, vStr)
 		if !strings.HasPrefix(k, fs.ConfigKeyEphemeralPrefix) {
-			m.Set(k, vStr)
+			userM.Set(k, vStr)
 		} else {
 			ephemeral.Set(k, vStr)
 		}

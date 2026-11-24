@@ -163,7 +163,7 @@ The main rclone commands with most used first
 
 <!-- markdownlint-capture -->
 <!-- markdownlint-disable line-length -->
-- [rclone config](/commands/rclone_config/) - Enter an interactive configurationsession.
+- [rclone config](/commands/rclone_config/) - Enter an interactive configuration session.
 - [rclone copy](/commands/rclone_copy/) - Copy files from source to dest, skipping already copied.
 - [rclone sync](/commands/rclone_sync/) - Make source and dest identical, modifying destination only.
 - [rclone bisync](/commands/rclone_bisync/) - [Bidirectional synchronization](/bisync/) between two paths.
@@ -253,7 +253,7 @@ the config file (configured with `rclone config`).
 
 ### remote:/path/to/dir
 
-On most backends this is refers to the same directory as
+On most backends this refers to the same directory as
 `remote:path/to/dir` and that format should be preferred.  On a very
 small number of remotes (FTP, SFTP, Dropbox for business) this will
 refer to a different directory.  On these, paths without a leading `/`
@@ -1167,7 +1167,7 @@ to use half of it - 5 Mbit/s. This is 5/8 = 0.625 MiB/s so you would
 use a `--bwlimit 0.625M` parameter for rclone.
 
 On Unix systems (Linux, macOS, …) the bandwidth limiter can be toggled by
-sending a `SIGUSR2` signal to rclone. This allows to remove the limitations
+sending a `SIGUSR2` signal to rclone. This allows you to remove the limitations
 of a long running rclone transfer and to restore it back to the value specified
 with `--bwlimit` quickly when needed. Assuming there is only one rclone instance
 running, you can toggle the limiter like this:
